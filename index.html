@@ -3,321 +3,144 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美育虎 U10 旗艦管理系統</title>
+    <title>美育虎U10 - 終極診斷</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; background-color: #0b0e14; color: #e2e8f0; margin: 0; -webkit-tap-highlight-color: transparent; }
-        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .active-tab { background: #fbbf24; color: #000; box-shadow: 0 4px 15px rgba(251, 191, 36, 0.3); }
-        .input-dark { background: #0f172a; border: 1px solid #334155; color: white; border-radius: 0.75rem; width: 100%; }
-        .status-present { background-color: #22c55e !important; color: white !important; }
-        .status-absent { background-color: #ef4444 !important; color: white !important; }
-        
-        /* 權限控制樣式 */
-        .coach-only { display: none; }
-        body.coach-mode-active .coach-only { display: block; }
-        body.coach-mode-active .parent-only { display: none; }
-        
-        /* 動畫 */
-        .animate-in { animation: fadeIn 0.3s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        body { background-color: #0f172a; color: white; font-family: sans-serif; }
+        .debug-log { background: #000; color: #0f0; font-family: monospace; font-size: 10px; padding: 10px; height: 150px; overflow-y: auto; border-top: 2px solid #333; position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000; }
     </style>
 </head>
-<body class="pb-24">
+<body class="pb-40">
 
-    <!-- 初始化遮罩 -->
-    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 z-[100] flex flex-col items-center justify-center transition-opacity duration-500">
-        <div class="w-12 h-12 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <div class="text-yellow-400 font-bold text-sm tracking-widest">TIGERS SYSTEM LOADING...</div>
-        <div id="debug-info" class="mt-4 text-[10px] text-slate-500 text-center px-4"></div>
+    <!-- 轉圈圈遮罩 -->
+    <div id="loader" class="fixed inset-0 bg-slate-900 z-[999] flex flex-col items-center justify-center p-10 text-center">
+        <div class="w-12 h-12 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <h2 class="text-xl font-bold text-yellow-500">系統診斷中...</h2>
+        <p class="text-slate-500 text-xs mt-2">如果超過 10 秒沒反應，請看下方綠色文字報錯</p>
+        <button onclick="forceShow()" class="mt-8 px-6 py-2 bg-slate-800 rounded-full text-xs">強制進入介面 (僅限測試)</button>
     </div>
 
-    <header class="p-4 glass-panel sticky top-0 z-50 flex justify-between items-center mb-6">
-        <div onclick="requestCoachMode()" class="cursor-pointer active:scale-95 transition-transform">
-            <h1 class="text-xl font-black italic text-yellow-400 leading-tight">
-                TIGERS U10 
-                <span id="mode-label" class="text-[10px] not-italic text-slate-500 block tracking-[0.3em]">PARENT VIEW</span>
-            </h1>
-        </div>
-        <div class="flex items-center gap-3">
-            <div id="coach-badge" class="hidden bg-red-600 text-white text-[10px] px-2 py-0.5 rounded font-bold animate-pulse">COACH</div>
-            <div class="flex flex-col items-end">
-                <div class="flex items-center gap-1.5">
-                    <span id="sync-dot" class="w-2 h-2 rounded-full bg-red-500"></span>
-                    <span id="sync-label" class="text-[10px] font-bold text-slate-400 uppercase">Offline</span>
-                </div>
+    <!-- 主介面 -->
+    <div id="app" class="hidden p-4">
+        <header class="flex justify-between items-center mb-6">
+            <h1 onclick="requestAdmin()" class="text-2xl font-black italic text-yellow-500">TIGERS U10</h1>
+            <div id="cloud-indicator" class="text-[10px] bg-red-900 px-2 py-1 rounded">OFFLINE</div>
+        </header>
+
+        <div id="parent-zone" class="space-y-4">
+            <div class="bg-slate-800 p-6 rounded-3xl text-center">
+                <input type="text" id="search-input" placeholder="輸入球員姓名" class="w-full bg-slate-950 p-4 rounded-xl text-center text-xl mb-4 outline-none border border-slate-700">
+                <button onclick="handleSearch()" class="w-full bg-yellow-500 text-black py-4 rounded-xl font-bold">查詢紀錄</button>
+                <div id="result-area" class="mt-6 text-left"></div>
             </div>
         </div>
-    </header>
 
-    <main class="px-4 max-w-4xl mx-auto">
-        
-        <!-- 教練導覽列 -->
-        <div id="coach-tabs" class="coach-only flex p-1.5 bg-slate-900/80 rounded-2xl mb-6 gap-1 animate-in">
-            <button onclick="setTab('daily')" id="tab-daily" class="flex-1 py-3 rounded-xl text-sm font-bold active-tab">訓練日誌</button>
-            <button onclick="setTab('manage')" id="tab-manage" class="flex-1 py-3 rounded-xl text-sm font-bold text-slate-400">成員管理</button>
-            <button onclick="exitCoachMode()" class="px-4 py-3 rounded-xl text-sm font-bold text-red-500">登出</button>
+        <div id="coach-zone" class="hidden space-y-4">
+            <div class="bg-slate-800 p-4 rounded-xl">
+                <div class="flex justify-between mb-4">
+                    <input type="date" id="target-date" class="bg-slate-950 p-2 rounded text-sm">
+                    <button onclick="saveData()" class="bg-blue-600 px-4 py-2 rounded text-sm font-bold">同步存檔</button>
+                </div>
+                <div id="member-list" class="space-y-2"></div>
+            </div>
         </div>
+    </div>
 
-        <!-- [家長查詢介面] -->
-        <section id="view-parent" class="parent-only space-y-6 animate-in">
-            <div class="glass-panel p-8 rounded-[2.5rem] text-center border-b-4 border-yellow-400/20">
-                <h2 class="text-xl font-bold text-white mb-6">虎之子成長檔案查詢</h2>
-                <div class="relative mb-4">
-                    <input type="text" id="search-name" placeholder="請輸入學員姓名" 
-                        class="input-dark p-5 text-center text-2xl font-bold border-2 border-slate-700 focus:border-yellow-400 transition-colors">
-                </div>
-                <button onclick="performQuery()" class="w-full bg-yellow-400 text-black py-5 rounded-2xl font-black text-lg shadow-[0_10px_20px_rgba(251,191,36,0.2)] active:scale-95 transition-all">
-                    立即查詢內容
-                </button>
-                <div id="query-result" class="mt-8 text-left"></div>
-            </div>
-            <p class="text-center text-[10px] text-slate-600">© 美育虎足球隊 U10 內部系統</p>
-        </section>
-
-        <!-- [教練：訓練日誌介面] -->
-        <section id="view-daily" class="coach-only space-y-6 hidden">
-            <div class="glass-panel p-5 rounded-3xl space-y-4">
-                <div class="flex justify-between items-center">
-                    <label class="text-[10px] font-black text-slate-500 uppercase italic">訓練日期選擇</label>
-                    <input type="date" id="roll-date" onchange="fetchDailyData()" class="bg-transparent border-none text-yellow-400 font-bold outline-none cursor-pointer">
-                </div>
-                <textarea id="daily-focus" placeholder="在這裡輸入今日訓練大綱與評價，家長查詢後即可看見..." class="input-dark p-4 h-32 text-sm leading-relaxed"></textarea>
-                <button onclick="saveAllToCloud()" id="save-btn" class="w-full bg-yellow-400 text-black py-4 rounded-2xl font-black shadow-lg">💾 同步雲端並保存</button>
-            </div>
-            
-            <div class="flex items-center justify-between px-2">
-                <h3 class="text-xs font-bold text-slate-500">球員點名系統</h3>
-                <span id="player-count" class="text-[10px] text-slate-600"></span>
-            </div>
-            <div id="attendance-list" class="grid grid-cols-1 gap-3"></div>
-        </section>
-
-        <!-- [教練：名單管理介面] -->
-        <section id="view-manage" class="coach-only space-y-6 hidden">
-            <div class="glass-panel p-6 rounded-3xl border-2 border-dashed border-slate-700">
-                <h3 class="text-sm font-bold text-white mb-4">快速新增球員</h3>
-                <div class="flex gap-2">
-                    <input type="text" id="new-player-name" placeholder="輸入姓名..." class="input-dark p-3 text-sm">
-                    <button onclick="commitPlayer()" class="bg-blue-600 text-white font-bold px-6 rounded-xl text-sm whitespace-nowrap">新增</button>
-                </div>
-            </div>
-            <div id="management-grid" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
-        </section>
-
-    </main>
+    <!-- 螢幕 log 視窗 -->
+    <div id="debug" class="debug-log">
+        <div>[SYSTEM] 初始化診斷開始...</div>
+    </div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // 環境變數
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-u10-v30-prod';
-        
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
+        const log = (msg, color = "#0f0") => {
+            const div = document.createElement('div');
+            div.style.color = color;
+            div.innerText = `> ${msg}`;
+            const container = document.getElementById('debug');
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        };
 
-        let players = [];
-        let dailyData = { roll: {}, note: "" };
-        let currentUser = null;
+        window.onerror = (e) => log("JS Error: " + e, "#f00");
 
-        // 絕對路徑定義 (符合 Rule 1)
-        const getColPath = (name) => collection(db, 'artifacts', appId, 'public', 'data', name);
-        const getDocPath = (name, id) => doc(db, 'artifacts', appId, 'public', 'data', name, id);
+        const firebaseConfig = {
+            apiKey: "AIzaSyAgz1BJI-PJLv3VIUfMQSmr6F-WkXzEMzU",
+            authDomain: "mei-yu-u10.firebaseapp.com",
+            projectId: "mei-yu-u10",
+            storageBucket: "mei-yu-u10.firebasestorage.app",
+            messagingSenderId: "157433419856",
+            appId: "1:157433419856:web:07db1e6968990d5719d955"
+        };
 
-        // 啟動與身份驗證 (符合 Rule 3)
-        async function startApp() {
+        let db, auth, players = [], currentRoll = {};
+
+        async function init() {
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                document.getElementById('debug-info').innerText = "Auth Failed: " + err.message;
+                log("正在連線 Firebase...");
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                log("Firebase 模組載入成功");
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        log("身份驗證成功: " + user.uid);
+                        document.getElementById('cloud-indicator').innerText = "ONLINE";
+                        document.getElementById('cloud-indicator').className = "text-[10px] bg-green-600 px-2 py-1 rounded";
+                        setupApp();
+                    } else {
+                        log("嘗試匿名登入...");
+                        signInAnonymously(auth).catch(e => {
+                            log("登入失敗: " + e.code, "#f00");
+                            log("請確認 Firebase 匿名登入已開啟", "#f00");
+                        });
+                    }
+                });
+
+            } catch (e) {
+                log("初始化崩潰: " + e.message, "#f00");
             }
         }
 
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            if (user) {
-                updateSyncUI(true);
-                initDataListeners();
-                setTimeout(() => document.getElementById('loading-overlay').style.opacity = '0', 500);
-                setTimeout(() => document.getElementById('loading-overlay').classList.add('hidden'), 1000);
-            }
-        });
-
-        function updateSyncUI(online) {
-            const dot = document.getElementById('sync-dot');
-            const label = document.getElementById('sync-label');
-            dot.className = online ? "w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "w-2 h-2 rounded-full bg-red-500 animate-pulse";
-            label.innerText = online ? "Cloud Live" : "Offline";
-        }
-
-        function initDataListeners() {
-            // 1. 名單監聽
-            onSnapshot(getColPath('members'), (snap) => {
-                players = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-                              .sort((a,b) => a.name.localeCompare(b.name, 'zh-TW'));
-                document.getElementById('player-count').innerText = `共 ${players.length} 位成員`;
-                renderAttendance();
-                renderManageGrid();
-            }, (err) => console.error("Members Listener Error:", err));
-
-            // 2. 初始化日期
-            const today = new Date().toLocaleDateString('en-CA');
-            document.getElementById('roll-date').value = today;
-            fetchDailyData();
-        }
-
-        window.fetchDailyData = () => {
-            const date = document.getElementById('roll-date').value;
-            onSnapshot(getDocPath('daily', date), (snap) => {
-                dailyData = snap.exists() ? snap.data() : { roll: {}, note: "" };
-                const noteEl = document.getElementById('daily-focus');
-                if (noteEl) noteEl.value = dailyData.note || "";
-                renderAttendance();
+        function setupApp() {
+            log("開始讀取球員名單...");
+            // 使用最簡單的集合路徑進行測試
+            onSnapshot(collection(db, "members"), (snap) => {
+                players = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                log(`成功獲取 ${players.length} 名球員`);
+                document.getElementById('loader').style.display = 'none';
+                document.getElementById('app').classList.remove('hidden');
+            }, (err) => {
+                log("讀取資料庫失敗: " + err.message, "#f00");
+                log("請確認 Firestore Rules 已發布且允許讀取", "#f00");
             });
+        }
+
+        window.forceShow = () => {
+            log("強制跳過連線，顯示介面...");
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('app').classList.remove('hidden');
         };
 
-        // --- 模式管理邏輯 ---
-        window.requestCoachMode = () => {
-            if(document.body.classList.contains('coach-mode-active')) return;
-            const pw = prompt("【教練身分驗證】\n請輸入 4 位數管理密碼：");
-            if(pw === "0227") {
-                document.body.classList.add('coach-mode-active');
-                document.getElementById('coach-badge').classList.remove('hidden');
-                document.getElementById('mode-label').innerText = "COACH PANEL";
-                setTab('daily');
-            } else if (pw !== null) {
-                alert("密碼錯誤。本區塊僅供教練操作。");
+        window.requestAdmin = () => {
+            const p = prompt("密碼");
+            if(p === "0227") {
+                document.getElementById('coach-zone').classList.remove('hidden');
+                log("已進入教練模式");
             }
         };
 
-        window.exitCoachMode = () => {
-            if(confirm("確定退出教練管理模式？")) {
-                document.body.classList.remove('coach-mode-active');
-                document.getElementById('coach-badge').classList.add('hidden');
-                document.getElementById('mode-label').innerText = "PARENT VIEW";
-                document.getElementById('view-parent').classList.remove('hidden');
-                document.getElementById('view-daily').classList.add('hidden');
-                document.getElementById('view-manage').classList.add('hidden');
-            }
+        window.handleSearch = () => {
+            const name = document.getElementById('search-input').value;
+            log("查詢姓名: " + name);
+            // 邏輯省略...
         };
 
-        // --- 核心功能渲染 ---
-        window.renderAttendance = () => {
-            const container = document.getElementById('attendance-list');
-            if(!container) return;
-            container.innerHTML = players.map(p => {
-                const r = dailyData.roll[p.id] || { s: 0 };
-                return `
-                    <div class="glass-panel p-4 rounded-2xl flex justify-between items-center animate-in">
-                        <span class="font-bold text-white tracking-wide text-lg">${p.name}</span>
-                        <div class="flex gap-2">
-                            <button onclick="setStatus('${p.id}', 1)" class="w-14 h-11 rounded-xl font-black text-sm transition-all ${r.s === 1 ? 'status-present scale-105 shadow-lg' : 'bg-slate-800/50 text-slate-500'}">出</button>
-                            <button onclick="setStatus('${p.id}', 2)" class="w-14 h-11 rounded-xl font-black text-sm transition-all ${r.s === 2 ? 'status-absent scale-105 shadow-lg' : 'bg-slate-800/50 text-slate-500'}">缺</button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        };
-
-        window.setStatus = (id, s) => {
-            if (!dailyData.roll[id]) dailyData.roll[id] = { s: 0 };
-            dailyData.roll[id].s = (dailyData.roll[id].s === s) ? 0 : s;
-            renderAttendance();
-        };
-
-        window.saveAllToCloud = async () => {
-            const date = document.getElementById('roll-date').value;
-            const btn = document.getElementById('save-btn');
-            dailyData.note = document.getElementById('daily-focus').value;
-            
-            btn.disabled = true;
-            btn.innerText = "⏳ 正在同步至雲端...";
-            try {
-                await setDoc(getDocPath('daily', date), dailyData);
-                btn.innerText = "✅ 同步成功";
-                setTimeout(() => { btn.disabled = false; btn.innerText = "💾 同步雲端並保存"; }, 2000);
-            } catch (e) { 
-                alert("儲存失敗，請檢查網路。"); 
-                btn.disabled = false;
-                btn.innerText = "💾 重試同步";
-            }
-        };
-
-        window.commitPlayer = async () => {
-            const input = document.getElementById('new-player-name');
-            const name = input.value.trim();
-            if(!name) return;
-            await addDoc(getColPath('members'), { name, created: Date.now() });
-            input.value = "";
-        };
-
-        window.renderManageGrid = () => {
-            const grid = document.getElementById('management-grid');
-            if(!grid) return;
-            grid.innerHTML = players.map(p => `
-                <div class="glass-panel p-4 rounded-2xl flex justify-between items-center">
-                    <span class="font-bold text-white">${p.name}</span>
-                    <button onclick="if(confirm('確定移除 ${p.name}？')) deleteDoc(getDocPath('members', '${p.id}'))" 
-                        class="text-red-500 text-xs font-bold bg-red-500/10 px-3 py-2 rounded-lg active:bg-red-500/20">移除</button>
-                </div>
-            `).join('');
-        };
-
-        // --- 家長查詢功能 ---
-        window.performQuery = () => {
-            const name = document.getElementById('search-name').value.trim();
-            const p = players.find(x => x.name === name);
-            const res = document.getElementById('query-result');
-            
-            if (!p) { 
-                res.innerHTML = `<div class="p-6 text-center text-red-400 font-bold bg-red-500/10 rounded-2xl border border-red-500/20">系統查無此人，請確認姓名是否正確（需與點名單一致）。</div>`; 
-                return; 
-            }
-            
-            const r = dailyData.roll[p.id] || { s: 0 };
-            res.innerHTML = `
-                <div class="glass-panel p-6 rounded-3xl animate-in border-l-4 ${r.s === 1 ? 'border-green-500' : 'border-red-500'}">
-                    <div class="flex justify-between items-start mb-6">
-                        <div>
-                            <h3 class="text-3xl font-black text-yellow-400">${p.name}</h3>
-                            <p class="text-xs text-slate-500 mt-1">U10 虎之子培訓計畫</p>
-                        </div>
-                        <div class="text-right">
-                            <span class="block text-[10px] text-slate-500 uppercase font-black">今日狀態</span>
-                            <span class="text-xl font-black ${r.s === 1 ? 'text-green-400' : r.s === 2 ? 'text-red-400' : 'text-slate-600'}">
-                                ${r.s === 1 ? '✅ 已出席' : r.s === 2 ? '❌ 缺席' : '❔ 尚未點名'}
-                            </span>
-                        </div>
-                    </div>
-                    <div class="bg-slate-900/80 p-5 rounded-2xl border border-slate-800">
-                        <div class="flex items-center gap-2 mb-2">
-                            <span class="w-1.5 h-1.5 bg-yellow-400 rounded-full"></span>
-                            <p class="text-[10px] text-yellow-500 font-black uppercase tracking-widest">教練今日訓練筆記</p>
-                        </div>
-                        <p class="text-white text-sm leading-relaxed">${dailyData.note || "今日教練忙於訓練，尚無特別公告。"}</p>
-                    </div>
-                    <p class="text-[9px] text-slate-700 mt-4 text-center italic">更新時間：${new Date().toLocaleTimeString()}</p>
-                </div>
-            `;
-        };
-
-        window.setTab = (t) => {
-            document.getElementById('view-daily').classList.toggle('hidden', t !== 'daily');
-            document.getElementById('view-manage').classList.toggle('hidden', t !== 'manage');
-            document.getElementById('tab-daily').className = t === 'daily' ? 'flex-1 py-3 rounded-xl text-sm font-bold active-tab' : 'flex-1 py-3 rounded-xl text-sm font-bold text-slate-400';
-            document.getElementById('tab-manage').className = t === 'manage' ? 'flex-1 py-3 rounded-xl text-sm font-bold active-tab' : 'flex-1 py-3 rounded-xl text-sm font-bold text-slate-400';
-        };
-
-        startApp();
+        init();
     </script>
 </body>
 </html>
