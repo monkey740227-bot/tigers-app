@@ -3,25 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美育虎U10 - 專業管理系統</title>
+    <title>美育虎U10 - 雲端管理系統</title>
     
-    <!-- 1. 載入 CSS 與核心 React 庫 -->
+    <!-- 核心庫 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- 2. 載入 Firebase 完整庫 (使用 UMD 格式以避開 require 問題) -->
+    <!-- Firebase SDK (Compat 版最穩) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; background-color: #020617; color: #f1f5f9; }
-        .tiger-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
-        .animate-in { animation: fadeIn 0.3s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #020617; color: #f1f5f9; -webkit-tap-highlight-color: transparent; }
+        .tiger-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid rgba(255,255,255,0.05); }
+        .animate-fade { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* 隱藏滾動條但保持功能 */
+        ::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body>
@@ -29,7 +31,6 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        // 由於使用了 compat 版本，我們直接從 firebase 全域變數獲取功能
         const firebase = window.firebase;
         const { useState, useEffect, useMemo } = React;
 
@@ -43,18 +44,14 @@
             appId: "1:157433419856:web:07db1e6968990d5719d955"
         };
 
-        // 初始化 Firebase
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
-        
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
         const appId = "tigers-u10";
 
         function App() {
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('parent');
+            const [view, setView] = useState('parent'); // parent, coach, settings
             const [players, setPlayers] = useState([]);
             const [dailyRecords, setDailyRecords] = useState({});
             const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -62,172 +59,243 @@
             const [searchResult, setSearchResult] = useState(null);
             const [loading, setLoading] = useState(true);
 
-            // 登入邏輯
+            // 1. 初始化登入
             useEffect(() => {
-                auth.signInAnonymously().catch(err => console.error("Firebase Auth Error:", err));
-                return auth.onAuthStateChanged((u) => {
+                auth.signInAnonymously().catch(console.error);
+                return auth.onAuthStateChanged(u => {
                     setUser(u);
                     if (u) setLoading(false);
                 });
             }, []);
 
-            // 資料監聽
+            // 2. 即時資料監聽 (成員 + 點名紀錄)
             useEffect(() => {
                 if (!user) return;
                 
-                // 監聽成員
-                const unsubMembers = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members')
-                    .orderBy('name')
-                    .onSnapshot((snap) => {
+                // 監聽名單
+                const unsubPlayers = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members')
+                    .orderBy('number')
+                    .onSnapshot(snap => {
                         setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                     });
 
-                // 監聽日誌
+                // 監聽所有點名紀錄
                 const unsubDaily = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily')
-                    .onSnapshot((snap) => {
-                        const records = {};
-                        snap.docs.forEach(d => { records[d.id] = d.data(); });
-                        setDailyRecords(records);
+                    .onSnapshot(snap => {
+                        const data = {};
+                        snap.docs.forEach(d => { data[d.id] = d.data(); });
+                        setDailyRecords(data);
                     });
 
-                return () => { unsubMembers(); unsubDaily(); };
+                return () => { unsubPlayers(); unsubDaily(); };
             }, [user]);
 
-            // 出勤累計計算
-            const stats = useMemo(() => {
-                const counts = {};
+            // 3. 計算每位學員的總出勤次數
+            const attendanceStats = useMemo(() => {
+                const stats = {};
                 Object.values(dailyRecords).forEach(day => {
-                    Object.entries(day.roll || {}).forEach(([pId, status]) => {
-                        if (status === 1) counts[pId] = (counts[pId] || 0) + 1;
-                    });
+                    if (day.roll) {
+                        Object.entries(day.roll).forEach(([pId, status]) => {
+                            if (status === 1) stats[pId] = (stats[pId] || 0) + 1;
+                        });
+                    }
                 });
-                return counts;
+                return stats;
             }, [dailyRecords]);
 
-            const handleSave = async () => {
-                const note = document.getElementById('daily-note').value;
-                const currentRoll = dailyRecords[selectedDate]?.roll || {};
+            // --- 教練操作功能 ---
+            const updateAttendance = async (pId, status) => {
+                const currentDay = dailyRecords[selectedDate] || { roll: {}, note: "" };
+                const newRoll = { ...currentDay.roll };
+                // 如果點擊已選中的狀態，則取消 (設為 0)
+                newRoll[pId] = newRoll[pId] === status ? 0 : status;
+                
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily').doc(selectedDate).set({
-                    roll: currentRoll, note, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                alert("✅ 雲端同步成功！");
+                    ...currentDay,
+                    roll: newRoll,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
             };
 
-            const updateRoll = async (pId, status) => {
-                const dayData = dailyRecords[selectedDate] || { roll: {}, note: "" };
-                const newRoll = { ...dayData.roll };
-                newRoll[pId] = newRoll[pId] === status ? 0 : status;
+            const saveNote = async (val) => {
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily').doc(selectedDate).set({
-                    ...dayData, roll: newRoll
-                });
+                    note: val,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            };
+
+            const addPlayer = async () => {
+                const name = prompt("輸入球員姓名");
+                const num = prompt("輸入背號");
+                if (name && num) {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members').add({
+                        name, number: parseInt(num), createdAt: Date.now()
+                    });
+                }
+            };
+
+            const deletePlayer = async (id, name) => {
+                if (confirm(`確定要刪除學員 ${name} 嗎？此操作不可恢復。`)) {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members').doc(id).delete();
+                }
             };
 
             if (loading) return (
-                <div className="flex h-screen items-center justify-center bg-slate-950 text-yellow-500 font-black animate-pulse text-2xl italic">
-                    TIGERS CONNECTING...
+                <div className="flex h-screen items-center justify-center bg-slate-950 text-yellow-500 font-black text-xl italic animate-pulse">
+                    TIGERS CLOUD LOADING...
                 </div>
             );
 
             return (
-                <div className="min-h-screen bg-slate-950 text-slate-100">
-                    <nav className="sticky top-0 z-50 flex items-center justify-between bg-slate-900/80 p-4 backdrop-blur-md border-b border-white/5">
-                        <div className="text-xl font-black italic">TIGERS <span className="text-yellow-500 underline decoration-2">U10</span></div>
-                        <button 
-                            onClick={() => {
-                                if (view === 'parent') {
-                                    const pwd = prompt("教練認證密碼");
-                                    if (pwd === "0227") setView('admin');
-                                } else { setView('parent'); }
-                            }}
-                            className="bg-slate-800 px-4 py-2 rounded-full text-[10px] font-bold tracking-widest border border-white/10 uppercase"
-                        >
-                            {view === 'parent' ? "Coach Login" : "Switch to Parent"}
-                        </button>
+                <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+                    {/* Header */}
+                    <nav className="p-4 border-b border-white/5 flex justify-between items-center bg-slate-900/50 backdrop-blur-lg sticky top-0 z-40">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-yellow-500 rounded-lg flex items-center justify-center text-black font-black italic shadow-lg shadow-yellow-500/20">T</div>
+                            <span className="font-black italic text-lg tracking-tighter">MEIYU <span className="text-yellow-500">TIGERS</span></span>
+                        </div>
+                        <div className="flex gap-2">
+                            {view !== 'parent' && (
+                                <button onClick={() => setView('settings')} className="p-2 rounded-full bg-slate-800 text-slate-400">
+                                    ⚙️
+                                </button>
+                            )}
+                            <button 
+                                onClick={() => {
+                                    if (view === 'parent') {
+                                        const p = prompt("請輸入管理密碼");
+                                        if (p === "0227") setView('coach');
+                                    } else {
+                                        setView('parent');
+                                    }
+                                }}
+                                className="px-4 py-1.5 rounded-full bg-yellow-500 text-black text-[10px] font-black uppercase tracking-widest shadow-lg shadow-yellow-500/20"
+                            >
+                                {view === 'parent' ? "Coach Access" : "Logout"}
+                            </button>
+                        </div>
                     </nav>
 
-                    <main className="max-w-md mx-auto p-4 pb-20">
-                        {view === 'parent' ? (
-                            <div className="space-y-6">
-                                <div className="tiger-gradient p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-                                    <h2 className="text-center text-lg font-bold mb-6 italic">PLAYER SEARCH</h2>
-                                    <input 
-                                        type="text" 
-                                        placeholder="請輸入學員姓名"
-                                        className="w-full bg-slate-950 border border-slate-700 p-4 rounded-2xl text-center text-xl focus:border-yellow-500 outline-none transition-all"
-                                        value={searchName}
-                                        onChange={e => setSearchName(e.target.value)}
-                                    />
+                    <main className="flex-1 max-w-lg mx-auto w-full p-4 overflow-y-auto">
+                        
+                        {/* 1. 家長查詢頁面 */}
+                        {view === 'parent' && (
+                            <div className="space-y-6 animate-fade">
+                                <div className="tiger-card p-8 rounded-[2rem] shadow-2xl text-center">
+                                    <h2 className="text-xl font-bold mb-2">學員出席數據調閱</h2>
+                                    <p className="text-slate-500 text-xs mb-6">輸入學員姓名以獲取最新訓練紀錄</p>
+                                    
+                                    <div className="relative mb-4">
+                                        <input 
+                                            type="text" 
+                                            placeholder="例：王小明"
+                                            className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl text-center text-xl font-bold focus:border-yellow-500 outline-none transition-all shadow-inner"
+                                            value={searchName}
+                                            onChange={e => setSearchName(e.target.value)}
+                                        />
+                                    </div>
                                     <button 
-                                        onClick={() => setSearchResult(players.find(x => x.name === searchName) || "not_found")}
-                                        className="w-full mt-4 bg-yellow-500 text-black font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-transform"
+                                        onClick={() => {
+                                            const found = players.find(p => p.name === searchName);
+                                            setSearchResult(found || "none");
+                                        }}
+                                        className="w-full bg-yellow-500 text-black font-black py-4 rounded-2xl hover:bg-yellow-400 active:scale-95 transition-all shadow-lg shadow-yellow-500/10"
                                     >
-                                        立即查詢
+                                        查詢數據
                                     </button>
 
-                                    {searchResult && searchResult !== "not_found" && (
-                                        <div className="mt-8 p-6 bg-slate-950 rounded-3xl border-l-4 border-yellow-500 animate-in">
-                                            <div className="flex justify-between items-end mb-4 border-b border-white/5 pb-4">
+                                    {searchResult && searchResult !== "none" && (
+                                        <div className="mt-8 p-6 bg-slate-950/50 rounded-3xl border border-yellow-500/30 text-left animate-fade">
+                                            <div className="flex justify-between items-start mb-6 border-b border-white/5 pb-4">
                                                 <div>
-                                                    <p className="text-[10px] font-bold text-slate-400">PLAYER NAME</p>
-                                                    <h3 className="text-2xl font-black">{searchResult.name}</h3>
+                                                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Player</span>
+                                                    <h3 className="text-3xl font-black">{searchResult.name} <span className="text-yellow-500 text-sm">#{searchResult.number}</span></h3>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="text-[10px] font-bold text-slate-400">ATTENDANCE</p>
-                                                    <h3 className="text-2xl font-black text-yellow-500">{stats[searchResult.id] || 0} 次</h3>
+                                                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Total Attendance</span>
+                                                    <h3 className="text-3xl font-black text-yellow-500">{attendanceStats[searchResult.id] || 0} <span className="text-xs">次</span></h3>
                                                 </div>
                                             </div>
-                                            <div className="bg-slate-800/50 p-4 rounded-2xl text-sm border border-white/5">
-                                                <p className="text-yellow-500 font-bold text-[10px] mb-1 italic uppercase tracking-tighter">Status @ {selectedDate}</p>
-                                                <p className="font-bold">{dailyRecords[selectedDate]?.roll?.[searchResult.id] === 1 ? "✅ 今日正常出席訓練" : "❌ 今日未參加訓練"}</p>
-                                                <div className="mt-2 pt-2 border-t border-white/5 text-slate-400 text-xs">
-                                                    <span className="text-slate-500 font-bold uppercase text-[9px]">Coach Note:</span><br/>
-                                                    {dailyRecords[selectedDate]?.note || "今日無特別註記"}
+                                            
+                                            <div className="space-y-3">
+                                                <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/5">
+                                                    <span className="text-[10px] text-yellow-500/70 font-bold uppercase italic">Today's Status ({selectedDate})</span>
+                                                    <p className="text-lg font-bold mt-1">
+                                                        {dailyRecords[selectedDate]?.roll?.[searchResult.id] === 1 ? "✅ 準時出席訓練" : "❌ 今日未報到"}
+                                                    </p>
+                                                </div>
+                                                <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/5">
+                                                    <span className="text-[10px] text-slate-500 font-bold uppercase">Coach's Memo</span>
+                                                    <p className="text-sm text-slate-300 mt-1 leading-relaxed">
+                                                        {dailyRecords[selectedDate]?.note || "教練今日無特別留言。"}
+                                                    </p>
                                                 </div>
                                             </div>
                                         </div>
                                     )}
+                                    {searchResult === "none" && (
+                                        <p className="mt-4 text-red-400 text-xs font-bold animate-pulse">查無此球員，請確認姓名是否完全正確。</p>
+                                    )}
                                 </div>
                             </div>
-                        ) : (
-                            <div className="space-y-6 animate-in">
+                        )}
+
+                        {/* 2. 教練管理頁面 */}
+                        {view === 'coach' && (
+                            <div className="space-y-6 animate-fade">
+                                {/* 日期與日誌選擇 */}
                                 <div className="bg-slate-900 p-6 rounded-3xl border border-white/5 shadow-xl">
                                     <div className="flex justify-between items-center mb-4">
                                         <input 
                                             type="date" 
-                                            className="bg-slate-950 p-2 rounded-xl text-xs font-bold border border-white/5"
+                                            className="bg-slate-950 p-2 rounded-xl text-sm font-bold border border-white/10"
                                             value={selectedDate}
                                             onChange={e => setSelectedDate(e.target.value)}
                                         />
-                                        <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-xs font-bold transition-colors">同步雲端</button>
+                                        <span className="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full font-bold">點名模式</span>
                                     </div>
                                     <textarea 
-                                        id="daily-note"
-                                        className="w-full bg-slate-950 p-3 rounded-xl text-sm h-24 outline-none border border-white/5 focus:border-blue-500/50"
-                                        placeholder="今日訓練註記（教練專用）..."
-                                        defaultValue={dailyRecords[selectedDate]?.note || ""}
+                                        className="w-full bg-slate-950 p-4 rounded-2xl text-sm h-28 border border-white/5 outline-none focus:border-yellow-500/50 transition-all placeholder:text-slate-700"
+                                        placeholder="輸入今日訓練重點或給家長的叮嚀..."
+                                        value={dailyRecords[selectedDate]?.note || ""}
+                                        onChange={(e) => saveNote(e.target.value)}
                                     />
+                                    <p className="text-[9px] text-slate-600 mt-2 italic text-right">※ 內容隨打隨存，自動同步雲端</p>
                                 </div>
 
-                                <div className="space-y-2">
-                                    <p className="text-[10px] font-bold text-slate-500 px-2 tracking-widest uppercase">Member Roll Call</p>
-                                    {players.length === 0 && <div className="text-center p-8 text-slate-600 italic text-sm">尚未建立成員名單</div>}
+                                {/* 點名清單 */}
+                                <div className="space-y-2 pb-10">
+                                    <div className="px-2 flex justify-between items-center">
+                                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Player Roll Call</h3>
+                                        <span className="text-[10px] text-slate-600">Total: {players.length}</span>
+                                    </div>
+                                    
                                     {players.map(p => {
                                         const status = dailyRecords[selectedDate]?.roll?.[p.id] || 0;
                                         return (
-                                            <div key={p.id} className="flex justify-between items-center bg-slate-900 p-4 rounded-2xl border border-white/5 hover:border-white/10 transition-colors">
-                                                <div>
-                                                    <div className="font-bold text-slate-200">{p.name} <span className="text-[10px] text-slate-600 font-normal">#{p.number || '00'}</span></div>
-                                                    <div className="text-[10px] text-slate-500 font-bold">總出席：{stats[p.id] || 0}</div>
+                                            <div key={p.id} className="flex justify-between items-center bg-slate-900 p-4 rounded-2xl border border-white/5 hover:bg-slate-800/50 transition-all group">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 bg-slate-950 rounded-full flex items-center justify-center font-black text-yellow-500 border border-white/5">
+                                                        {p.number}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold text-slate-200">{p.name}</div>
+                                                        <div className="text-[10px] text-slate-500 font-bold">已累計：{attendanceStats[p.id] || 0} 次</div>
+                                                    </div>
                                                 </div>
                                                 <div className="flex gap-2">
                                                     <button 
-                                                        onClick={() => updateRoll(p.id, 1)}
-                                                        className={`w-12 py-2 rounded-xl text-xs font-black transition-all ${status === 1 ? 'bg-green-600 text-white shadow-lg shadow-green-900/20' : 'bg-slate-800 text-slate-600'}`}
-                                                    >出</button>
+                                                        onClick={() => updateAttendance(p.id, 1)}
+                                                        className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${status === 1 ? 'bg-green-600 shadow-lg shadow-green-900/40 text-white' : 'bg-slate-950 text-slate-700 border border-white/5'}`}
+                                                    >
+                                                        <span className="text-sm font-black">出</span>
+                                                    </button>
                                                     <button 
-                                                        onClick={() => updateRoll(p.id, 2)}
-                                                        className={`w-12 py-2 rounded-xl text-xs font-black transition-all ${status === 2 ? 'bg-red-600 text-white shadow-lg shadow-red-900/20' : 'bg-slate-800 text-slate-600'}`}
-                                                    >缺</button>
+                                                        onClick={() => updateAttendance(p.id, 2)}
+                                                        className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${status === 2 ? 'bg-red-600 shadow-lg shadow-red-900/40 text-white' : 'bg-slate-950 text-slate-700 border border-white/5'}`}
+                                                    >
+                                                        <span className="text-sm font-black">缺</span>
+                                                    </button>
                                                 </div>
                                             </div>
                                         )
@@ -235,10 +303,41 @@
                                 </div>
                             </div>
                         )}
+
+                        {/* 3. 學員名單設定頁面 */}
+                        {view === 'settings' && (
+                            <div className="space-y-6 animate-fade">
+                                <div className="flex justify-between items-center">
+                                    <h2 className="text-xl font-black italic">MEMBERSHIP</h2>
+                                    <button onClick={addPlayer} className="bg-yellow-500 text-black px-4 py-2 rounded-xl text-xs font-black shadow-lg shadow-yellow-500/20">
+                                        + 新增學員
+                                    </button>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3">
+                                    {players.map(p => (
+                                        <div key={p.id} className="bg-slate-900 p-4 rounded-2xl flex justify-between items-center border border-white/5">
+                                            <div className="flex items-center gap-4">
+                                                <span className="text-yellow-500 font-black">#{p.number}</span>
+                                                <span className="font-bold text-lg">{p.name}</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => deletePlayer(p.id, p.name)}
+                                                className="text-red-500/50 hover:text-red-500 text-xs font-bold"
+                                            >
+                                                刪除
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button onClick={() => setView('coach')} className="w-full py-4 text-slate-500 text-xs font-bold">返回點名介面</button>
+                            </div>
+                        )}
+
                     </main>
-                    
-                    <footer className="fixed bottom-0 left-0 right-0 p-4 bg-slate-950/80 backdrop-blur-sm text-center">
-                        <p className="text-[9px] text-slate-700 font-bold tracking-widest uppercase italic">Meiyu Tigers U10 Management System</p>
+
+                    {/* Footer Stats */}
+                    <footer className="p-4 bg-slate-950/90 backdrop-blur-md border-t border-white/5 text-center">
+                        <p className="text-[9px] text-slate-600 font-bold uppercase tracking-[0.2em]">Meiyu Tigers Football Club • U10 Cloud Core</p>
                     </footer>
                 </div>
             );
