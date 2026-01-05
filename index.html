@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TIGERS U10 Cloud System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #020617; color: #f8fafc; }
+        .tiger-gradient { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+    </style>
+</head>
+<body class="pb-20">
+
+    <div id="app">
+        <!-- 頂部導航 -->
+        <nav class="p-4 flex justify-between items-center bg-slate-950/80 sticky top-0 backdrop-blur-xl z-50 border-b border-white/5">
+            <div class="flex items-center gap-2" onclick="location.reload()">
+                <div class="w-8 h-8 tiger-gradient rounded-lg flex items-center justify-center">
+                    <i data-lucide="shield-check" class="text-black w-5 h-5"></i>
+                </div>
+                <h1 class="text-xl font-black italic tracking-tighter uppercase">Tigers <span class="text-yellow-500">U10</span></h1>
+            </div>
+            <button id="viewToggle" class="text-[10px] font-black uppercase text-yellow-500 border border-yellow-500/30 px-3 py-1 rounded-full">Admin Login</button>
+        </nav>
+
+        <main class="max-w-md mx-auto p-4 space-y-6">
+            <!-- 查詢區域 (家長端) -->
+            <div id="parentView" class="space-y-6 animate-fade-in">
+                <div class="bg-slate-900/50 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl text-center">
+                    <h2 class="text-xs font-black text-yellow-400 mb-6 tracking-widest uppercase">球員出缺席即時查詢</h2>
+                    <div class="space-y-4">
+                        <input type="text" id="searchInput" placeholder="輸入姓名 (例如: 郭昱謙)" 
+                            class="w-full bg-slate-950 border-2 border-slate-800 p-5 rounded-2xl text-center text-xl font-black focus:border-yellow-500 transition-all outline-none">
+                        <button id="searchBtn" class="w-full tiger-gradient text-black font-black py-5 rounded-2xl active:scale-95 transition-all">立即查詢</button>
+                    </div>
+                    <div id="searchResult" class="mt-8 hidden"></div>
+                </div>
+            </div>
+
+            <!-- 管理區域 (教練端) -->
+            <div id="adminView" class="hidden space-y-6 animate-fade-in">
+                <div class="flex justify-between items-center px-2">
+                    <h2 class="text-2xl font-black italic uppercase">Coach <span class="text-yellow-500">Dashboard</span></h2>
+                    <input type="date" id="datePicker" class="bg-slate-900 text-xs p-2 rounded-lg border border-white/10 outline-none">
+                </div>
+                <div id="playerList" class="space-y-3"></div>
+                <div class="p-6 border-2 border-dashed border-slate-800 rounded-[2rem]">
+                    <div class="flex gap-2">
+                        <input id="newName" placeholder="新增姓名" class="flex-1 bg-slate-950 p-4 rounded-xl text-sm border border-slate-800 outline-none">
+                        <button id="addPlayerBtn" class="bg-yellow-500 text-black px-6 rounded-xl font-black"><i data-lucide="plus"></i></button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 狀態指示器 -->
+        <footer class="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-50">
+            <div class="bg-slate-900/90 backdrop-blur-md border border-white/10 px-6 py-2 rounded-full">
+                <p id="syncStatus" class="text-[9px] text-slate-400 font-black uppercase tracking-[0.3em] flex items-center gap-2">
+                    <span class="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></span>
+                    Syncing...
+                </p>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAgz1BJI-PJLv3VIUfMQSmr6F-WkXzEMzU",
+            authDomain: "mei-yu-u10.firebaseapp.com",
+            projectId: "mei-yu-u10",
+            storageBucket: "mei-yu-u10.firebasestorage.app",
+            messagingSenderId: "157433419856",
+            appId: "1:157433419856:web:07db1e6968990d5719d955"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = "tigers-u10-main";
+
+        let players = [];
+        let dailyData = {};
+        let currentView = 'parent';
+        let selectedDate = new Date().toISOString().split('T')[0];
+
+        async function init() {
+            try {
+                await signInAnonymously(auth);
+                document.getElementById('syncStatus').innerHTML = `<span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>Cloud: <span class="text-green-500">Live</span>`;
+                lucide.createIcons();
+                document.getElementById('datePicker').value = selectedDate;
+
+                // 監聽球員名單
+                onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'members'), orderBy('name')), (snap) => {
+                    players = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if(currentView === 'admin') renderAdminList();
+                });
+
+                // 監聽點名紀錄
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'daily'), (snap) => {
+                    snap.docs.forEach(d => { dailyData[d.id] = d.data(); });
+                    if(currentView === 'admin') renderAdminList();
+                });
+            } catch (err) {
+                document.getElementById('syncStatus').innerText = "CONNECTION ERROR";
+            }
+        }
+
+        // 搜尋邏輯 (支持模糊比對與去空格)
+        document.getElementById('searchBtn').onclick = () => {
+            const raw = document.getElementById('searchInput').value;
+            const term = raw.replace(/\s+/g, "").toLowerCase();
+            const resDiv = document.getElementById('searchResult');
+            resDiv.classList.remove('hidden');
+
+            const p = players.find(x => x.name.replace(/\s+/g, "").toLowerCase().includes(term));
+
+            if (!p || !term) {
+                resDiv.innerHTML = `<div class="p-4 bg-red-500/10 text-red-400 text-xs rounded-xl border border-red-500/20">找不到球員，請檢查姓名輸入。</div>`;
+                return;
+            }
+
+            let present = 0, total = 0;
+            const records = Object.entries(dailyData)
+                .filter(([date, d]) => d.roll?.[p.id])
+                .sort((a,b) => b[0].localeCompare(a[0]));
+
+            records.forEach(([date, d]) => {
+                if (d.roll[p.id] !== 0) {
+                    total++;
+                    if (d.roll[p.id] === 1) present++;
+                }
+            });
+
+            const rate = total > 0 ? Math.round((present/total)*100) : 0;
+
+            resDiv.innerHTML = `
+                <div class="bg-slate-950 p-6 rounded-3xl border border-yellow-500/30 text-left animate-fade-in">
+                    <div class="flex justify-between items-end mb-4">
+                        <div>
+                            <span class="text-[10px] text-yellow-500 font-black uppercase tracking-tighter">#U10 Player</span>
+                            <h3 class="text-3xl font-black">${p.name}</h3>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-4xl font-black text-yellow-500">${rate}%</div>
+                            <div class="text-[8px] text-slate-500 font-black uppercase">Attendance</div>
+                        </div>
+                    </div>
+                    <div class="space-y-2 border-t border-white/5 pt-4">
+                        ${records.slice(0, 5).map(([date, d]) => `
+                            <div class="flex justify-between text-xs p-2 bg-slate-900 rounded-lg">
+                                <span class="text-slate-400">${date}</span>
+                                <span class="font-black ${d.roll[p.id] === 1 ? 'text-green-500' : 'text-red-500'}">${d.roll[p.id] === 1 ? '出席' : '缺席'}</span>
+                            </div>
+                        `).join('') || '<p class="text-center text-xs text-slate-600">無點名紀錄</p>'}
+                    </div>
+                </div>
+            `;
+        };
+
+        // 教練列表渲染
+        function renderAdminList() {
+            const list = document.getElementById('playerList');
+            const currentRoll = dailyData[selectedDate]?.roll || {};
+            list.innerHTML = players.map(p => {
+                const s = currentRoll[p.id] || 0;
+                return `
+                    <div class="bg-slate-900 p-4 rounded-2xl flex justify-between items-center border border-white/5">
+                        <span class="font-bold">${p.name}</span>
+                        <div class="flex gap-2">
+                            <button onclick="window.setRoll('${p.id}', 1)" class="w-10 h-10 rounded-xl ${s === 1 ? 'bg-green-600' : 'bg-slate-950 text-slate-700'} font-black">出</button>
+                            <button onclick="window.setRoll('${p.id}', 2)" class="w-10 h-10 rounded-xl ${s === 2 ? 'bg-red-600' : 'bg-slate-950 text-slate-700'} font-black">缺</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        window.setRoll = async (pid, status) => {
+            const roll = dailyData[selectedDate]?.roll || {};
+            roll[pid] = roll[pid] === status ? 0 : status;
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'daily', selectedDate), { roll, updatedAt: Date.now() }, { merge: true });
+        };
+
+        document.getElementById('viewToggle').onclick = () => {
+            if (currentView === 'parent') {
+                const p = prompt("教練密碼:");
+                if (p === "0227") {
+                    currentView = 'admin';
+                    document.getElementById('parentView').classList.add('hidden');
+                    document.getElementById('adminView').classList.remove('hidden');
+                    document.getElementById('viewToggle').innerText = "Logout";
+                    renderAdminList();
+                }
+            } else { location.reload(); }
+        };
+
+        document.getElementById('datePicker').onchange = (e) => {
+            selectedDate = e.target.value;
+            renderAdminList();
+        };
+
+        document.getElementById('addPlayerBtn').onclick = async () => {
+            const name = document.getElementById('newName').value.trim();
+            if (!name) return;
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), { name, createdAt: Date.now() });
+            document.getElementById('newName').value = '';
+        };
+
+        init();
+    </script>
+</body>
+</html>
