@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美育虎管理系統</title>
+    <title>美育虎 U10 管理系統</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -20,13 +20,10 @@
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
         body { font-family: 'Noto Sans TC', sans-serif; background-color: #020617; color: #f1f5f9; -webkit-tap-highlight-color: transparent; }
         .glass-card { background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.05); }
-        .report-preview { background-color: #020617; width: 500px; padding: 50px 40px; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 900; }
-        .status-present { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
-        .status-absent { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
-        .status-none { background: rgba(100, 116, 139, 0.1); color: #64748b; }
-        .group-divider { border-left: 4px solid #facc15; padding-left: 12px; margin: 24px 0 12px 0; }
+        .status-present { color: #22c55e; }
+        .status-absent { color: #ef4444; }
+        .report-preview { background-color: #020617; width: 500px; padding: 50px 40px; color: white; }
     </style>
 </head>
 <body>
@@ -48,43 +45,14 @@
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
-        const appId = "tigers-u10";
+        const appId = "tigers-u10-base"; // 使用 U10 獨立的 ID
 
-        // 專門解決注音輸入問題的 Input 元件
-        function SmartTextArea({ initialValue, onSave, placeholder }) {
-            const [localValue, setLocalValue] = useState(initialValue || "");
-            const isComposing = useRef(false);
-
-            useEffect(() => {
-                setLocalValue(initialValue || "");
-            }, [initialValue]);
-
-            const handleChange = (e) => {
-                setLocalValue(e.target.value);
-                // 如果不是在拼注音，就直接存檔
-                if (!isComposing.current) {
-                    onSave(e.target.value);
-                }
-            };
-
-            const handleCompositionStart = () => { isComposing.current = true; };
-            const handleCompositionEnd = (e) => {
-                isComposing.current = false;
-                onSave(e.target.value);
-            };
-
-            return (
-                <textarea 
-                    rows="1"
-                    placeholder={placeholder}
-                    value={localValue}
-                    onChange={handleChange}
-                    onCompositionStart={handleCompositionStart}
-                    onCompositionEnd={handleCompositionEnd}
-                    className="w-full bg-slate-950/60 p-3 rounded-xl text-xs text-slate-200 border border-transparent focus:border-yellow-500/50 outline-none resize-none"
-                />
-            );
-        }
+        const U10_INITIAL = [
+            { name: "李小明", number: "10", group: "U10" },
+            { name: "張小華", number: "22", group: "U10" },
+            { name: "王大同", number: "05", group: "U10" },
+            { name: "林教練", number: "COACH", group: "教練" }
+        ];
 
         function App() {
             const [user, setUser] = useState(null);
@@ -96,12 +64,7 @@
             const [activeGroup, setActiveGroup] = useState('U10');
             const [searchName, setSearchName] = useState('');
             const [searchResult, setSearchResult] = useState(null);
-            const [isCapturing, setIsCapturing] = useState(false);
-
-            const [newPlayerName, setNewPlayerName] = useState('');
-            const [newPlayerNumber, setNewPlayerNumber] = useState('');
-
-            const allReportRef = useRef(null);
+            const reportRef = useRef(null);
 
             useEffect(() => {
                 auth.signInAnonymously().catch(console.error);
@@ -110,10 +73,15 @@
 
             useEffect(() => {
                 if (!user) return;
-                const unsubPlayers = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members')
-                    .orderBy('order', 'asc')
-                    .onSnapshot(snap => setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-                
+                const memberRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members');
+                const unsubPlayers = memberRef.onSnapshot(snap => {
+                    if (snap.empty) {
+                        U10_INITIAL.forEach(p => memberRef.add(p));
+                    } else {
+                        setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    }
+                });
+
                 const unsubDaily = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily')
                     .onSnapshot(snap => {
                         const data = {};
@@ -126,13 +94,22 @@
             const currentRoll = useMemo(() => dailyRecords[selectedDate]?.roll || {}, [dailyRecords, selectedDate]);
             const currentComments = useMemo(() => dailyRecords[selectedDate]?.comments || {}, [dailyRecords, selectedDate]);
 
-            const groupedPlayers = useMemo(() => {
+            // 計算個人出席率邏輯
+            const calculateAttendance = (pId) => {
+                let totalSessions = 0;
+                let presentSessions = 0;
+                Object.values(dailyRecords).forEach(record => {
+                    if (record.roll && record.roll[pId] !== undefined && record.roll[pId] !== 0) {
+                        totalSessions++;
+                        if (record.roll[pId] === 1) presentSessions++;
+                    }
+                });
                 return {
-                    'U9': players.filter(p => p.group === 'U9'),
-                    'U10': players.filter(p => p.group === 'U10'),
-                    '教練團': players.filter(p => p.group === '教練團')
+                    rate: totalSessions > 0 ? Math.round((presentSessions / totalSessions) * 100) : 0,
+                    total: totalSessions,
+                    present: presentSessions
                 };
-            }, [players]);
+            };
 
             const updateDaily = async (key, value) => {
                 const ref = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily').doc(selectedDate);
@@ -144,93 +121,76 @@
                 updateDaily('roll', { ...currentRoll, [pId]: newStatus });
             };
 
-            const captureFullReport = async () => {
-                setIsCapturing(true);
-                setTimeout(async () => {
-                    const canvas = await html2canvas(allReportRef.current, { backgroundColor: '#020617', scale: 2 });
-                    const link = document.createElement('a');
-                    link.download = `美育虎_點名_${selectedDate}.png`;
-                    link.href = canvas.toDataURL('image/png');
-                    link.click();
-                    setIsCapturing(false);
-                }, 500);
+            const captureReport = async () => {
+                const canvas = await html2canvas(reportRef.current, { backgroundColor: '#020617' });
+                const link = document.createElement('a');
+                link.download = `美育虎U10_${selectedDate}.png`;
+                link.href = canvas.toDataURL();
+                link.click();
             };
 
-            const handleAddPlayer = async (e) => {
-                e.preventDefault();
-                if (!newPlayerName.trim()) return;
-                const lastOrder = players.length > 0 ? Math.max(...players.map(p => p.order || 0)) : 0;
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members').add({
-                    name: newPlayerName.trim(),
-                    number: newPlayerNumber.trim() || "00",
-                    group: activeGroup,
-                    order: lastOrder + 1,
-                    createdAt: Date.now()
-                });
-                setNewPlayerName(''); setNewPlayerNumber('');
-            };
-
-            if (loading) return <div className="h-screen flex items-center justify-center text-yellow-400 font-black text-xl animate-pulse">LOADING...</div>;
+            if (loading) return <div className="h-screen flex items-center justify-center text-yellow-400 font-black italic animate-pulse">U10 LOADING...</div>;
 
             return (
-                <div className="min-h-screen pb-24">
-                    <header className="sticky top-0 z-40 bg-slate-950 p-4 flex justify-between items-center border-b border-white/10">
-                        <div className="flex items-center gap-2" onClick={() => setView('parent')}>
-                            <span className="font-black italic text-xl uppercase">Meiyu <span className="text-yellow-400">Tigers</span></span>
+                <div className="min-h-screen pb-20">
+                    <header className="p-4 flex justify-between items-center border-b border-white/10 bg-slate-950 sticky top-0 z-50">
+                        <div onClick={() => setView('parent')} className="cursor-pointer">
+                            <span className="font-black italic text-lg uppercase">Tigers <span className="text-yellow-400">U10</span></span>
                         </div>
                         <button onClick={() => {
                             if (view === 'parent') {
-                                const p = prompt("教練認證碼"); if (p === "0227") setView('coach');
+                                const p = prompt("教練登入碼"); if (p === "1203") setView('coach');
                             } else setView('parent');
-                        }} className="bg-slate-900 border border-yellow-500/30 px-4 py-1.5 rounded-full text-[10px] font-black uppercase text-yellow-500">
-                            {view === 'parent' ? "Coach Login" : "Logout"}
+                        }} className="text-[10px] font-black uppercase text-yellow-500 border border-yellow-500/30 px-3 py-1 rounded-full">
+                            {view === 'parent' ? "Coach" : "Logout"}
                         </button>
                     </header>
 
-                    {view === 'coach' && (
-                        <nav className="p-4 flex gap-2 sticky top-[65px] z-30 bg-slate-950/80 backdrop-blur-md border-b border-white/5 overflow-x-auto no-scrollbar">
-                            {['U9', 'U10', '教練團'].map(g => (
-                                <button key={g} onClick={() => setActiveGroup(g)}
-                                    className={`px-6 py-2 rounded-full text-xs font-black transition-all whitespace-nowrap ${activeGroup === g ? 'bg-yellow-400 text-black' : 'bg-slate-900 text-slate-500'}`}
-                                >{g}</button>
-                            ))}
-                        </nav>
-                    )}
-
-                    <main className="max-w-md mx-auto p-4 w-full">
+                    <main className="max-w-md mx-auto p-4">
                         {view === 'parent' ? (
                             <div className="space-y-6">
-                                <div className="glass-card p-8 rounded-3xl text-center">
-                                    <h2 className="text-xs font-black mb-6 uppercase text-yellow-400 tracking-widest">Individual Record</h2>
+                                <div className="glass-card p-6 rounded-3xl text-center">
+                                    <h2 className="text-xs font-black text-yellow-400 mb-4 tracking-widest uppercase">U10 家長查詢系統</h2>
                                     <input 
                                         type="text" 
-                                        placeholder="請輸入球員姓名" 
+                                        placeholder="輸入球員姓名" 
                                         value={searchName} 
                                         onChange={e => setSearchName(e.target.value)}
-                                        className="w-full bg-slate-950 p-4 rounded-xl text-center text-lg font-bold border border-slate-800 mb-4 outline-none" 
+                                        className="w-full bg-slate-950 p-4 rounded-xl text-center text-lg font-bold mb-4 outline-none border border-slate-800" 
                                     />
                                     <button onClick={() => setSearchResult(players.find(p => p.name === searchName))}
-                                        className="w-full bg-yellow-400 text-black font-black py-4 rounded-xl active:scale-95 transition-all">查詢</button>
+                                        className="w-full bg-yellow-400 text-black font-black py-4 rounded-xl active:scale-95 transition-all">開始查詢</button>
                                 </div>
 
                                 {searchResult && (
-                                    <div className="glass-card rounded-3xl p-6 border border-yellow-500/20 shadow-2xl">
-                                        <div className="text-yellow-400 font-black italic text-[10px] mb-1 uppercase tracking-widest">#{searchResult.number} | {searchResult.group}</div>
-                                        <h3 className="text-2xl font-black mb-6 uppercase">{searchResult.name}</h3>
-                                        <div className="space-y-4">
+                                    <div className="glass-card rounded-3xl p-6 border border-yellow-500/20 animate-in fade-in slide-in-from-bottom-4">
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div>
+                                                <div className="text-yellow-400 font-black italic text-[10px] mb-1">#{searchResult.number} | {searchResult.group}</div>
+                                                <h3 className="text-2xl font-black">{searchResult.name}</h3>
+                                            </div>
+                                            {/* 出席率顯示區 */}
+                                            <div className="text-right">
+                                                <div className="text-[10px] font-black text-slate-500 uppercase">Attendance</div>
+                                                <div className="text-3xl font-black text-yellow-400">{calculateAttendance(searchResult.id).rate}<span className="text-sm">%</span></div>
+                                                <div className="text-[9px] text-slate-400 italic">共出席 {calculateAttendance(searchResult.id).present}/{calculateAttendance(searchResult.id).total} 次</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-3">
                                             {Object.entries(dailyRecords)
                                                 .filter(([date, data]) => data.roll?.[searchResult.id] || data.comments?.[searchResult.id])
                                                 .sort((a, b) => b[0].localeCompare(a[0]))
                                                 .map(([date, data]) => (
-                                                    <div key={date} className="bg-slate-950/60 p-4 rounded-xl border border-white/5">
+                                                    <div key={date} className="bg-slate-950/40 p-4 rounded-xl border border-white/5">
                                                         <div className="flex justify-between items-center mb-2">
                                                             <span className="text-[10px] font-black text-slate-500">{date}</span>
-                                                            <span className={`text-[9px] px-2 py-0.5 rounded font-black ${data.roll?.[searchResult.id] === 1 ? 'text-green-500' : 'text-red-500'}`}>
-                                                                {data.roll?.[searchResult.id] === 1 ? 'PRESENT' : 'ABSENT'}
+                                                            <span className={`text-[10px] font-black ${data.roll?.[searchResult.id] === 1 ? 'status-present' : 'status-absent'}`}>
+                                                                {data.roll?.[searchResult.id] === 1 ? '● PRESENT' : '○ ABSENT'}
                                                             </span>
                                                         </div>
-                                                        <p className="text-xs text-slate-300 italic border-l border-yellow-500/50 pl-2">
-                                                            {data.comments?.[searchResult.id] || "無紀錄"}
+                                                        <p className="text-xs text-slate-300 italic border-l-2 border-yellow-500/30 pl-3">
+                                                            {data.comments?.[searchResult.id] || "教練今日未留下評語"}
                                                         </p>
                                                     </div>
                                                 ))}
@@ -239,39 +199,28 @@
                                 )}
                             </div>
                         ) : (
+                            /* 教練端 */
                             <div className="space-y-6">
-                                <div className="glass-card p-6 rounded-2xl flex flex-col gap-4">
-                                    <input type="date" className="bg-transparent text-sm font-black text-yellow-400 outline-none" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
-                                    <button onClick={captureFullReport} className="w-full bg-slate-100 text-black py-3 rounded-xl text-[10px] font-black uppercase shadow-lg">
-                                        產生點名截圖
-                                    </button>
-                                </div>
-
-                                <div className="bg-slate-900/40 p-5 rounded-2xl border border-dashed border-slate-700">
-                                    <form onSubmit={handleAddPlayer} className="flex gap-2">
-                                        <input type="text" placeholder="姓名" value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)} className="flex-[2] bg-slate-950 p-3 rounded-lg text-sm outline-none" />
-                                        <input type="text" placeholder="背號" value={newPlayerNumber} onChange={e => setNewPlayerNumber(e.target.value)} className="flex-1 bg-slate-950 p-3 rounded-lg text-sm outline-none text-center" />
-                                        <button type="submit" className="bg-yellow-400 text-black px-4 rounded-lg font-black">+</button>
-                                    </form>
+                                <div className="glass-card p-4 rounded-2xl flex flex-col gap-4">
+                                    <input type="date" className="bg-transparent text-sm font-black text-yellow-400" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                                    <button onClick={captureReport} className="bg-white text-black text-[10px] font-black py-2 rounded-lg uppercase">產生 U10 點名圖表</button>
                                 </div>
 
                                 <div className="space-y-3">
-                                    {(groupedPlayers[activeGroup] || []).map(p => (
-                                        <div key={p.id} className="glass-card rounded-2xl p-4 space-y-3">
+                                    {players.filter(p => p.group === 'U10' || p.group === '教練').map(p => (
+                                        <div key={p.id} className="glass-card p-4 rounded-2xl space-y-3">
                                             <div className="flex justify-between items-center">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-[9px] font-black text-yellow-400 italic">#{p.number}</span>
-                                                    <span className="font-bold text-sm">{p.name}</span>
-                                                </div>
+                                                <span className="text-sm font-bold">#{p.number} {p.name}</span>
                                                 <div className="flex gap-2">
-                                                    <button onClick={() => toggleStatus(p.id, 1)} className={`w-12 py-2 rounded-lg text-[10px] font-black ${currentRoll[p.id] === 1 ? 'bg-green-600 text-white' : 'bg-slate-950 text-slate-700'}`}>出</button>
-                                                    <button onClick={() => toggleStatus(p.id, 2)} className={`w-12 py-2 rounded-lg text-[10px] font-black ${currentRoll[p.id] === 2 ? 'bg-red-600 text-white' : 'bg-slate-950 text-slate-700'}`}>缺</button>
+                                                    <button onClick={() => toggleStatus(p.id, 1)} className={`w-10 h-10 rounded-xl text-xs font-black ${currentRoll[p.id] === 1 ? 'bg-green-600' : 'bg-slate-900'}`}>出</button>
+                                                    <button onClick={() => toggleStatus(p.id, 2)} className={`w-10 h-10 rounded-xl text-xs font-black ${currentRoll[p.id] === 2 ? 'bg-red-600' : 'bg-slate-900'}`}>缺</button>
                                                 </div>
                                             </div>
-                                            <SmartTextArea 
-                                                initialValue={currentComments[p.id] || ""}
-                                                placeholder="輸入個人表現..."
-                                                onSave={(val) => updateDaily('comments', { ...currentComments, [p.id]: val })}
+                                            <textarea 
+                                                placeholder="表現備註..."
+                                                value={currentComments[p.id] || ""}
+                                                onChange={(e) => updateDaily('comments', { ...currentComments, [p.id]: e.target.value })}
+                                                className="w-full bg-slate-950 p-2 rounded-lg text-xs outline-none"
                                             />
                                         </div>
                                     ))}
@@ -280,30 +229,21 @@
                         )}
                     </main>
 
-                    {/* 隱藏截圖區 */}
-                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
-                        <div ref={allReportRef} className="report-preview">
-                            <div className="text-center mb-8">
-                                <h1 className="text-3xl font-black italic text-yellow-400 uppercase tracking-tighter">MEIYU TIGERS</h1>
-                                <p className="text-[10px] text-slate-500 font-black tracking-widest">{selectedDate} 點名報表</p>
+                    {/* 隱藏的導出圖表模板 */}
+                    <div style={{ position: 'absolute', left: '-9999px' }}>
+                        <div ref={reportRef} className="report-preview">
+                            <h1 className="text-2xl font-black italic text-yellow-400 mb-2">TIGERS U10 REPORT</h1>
+                            <p className="text-[10px] mb-8 text-slate-500">{selectedDate} 訓練日點名單</p>
+                            <div className="space-y-2">
+                                {players.map(p => (
+                                    <div key={p.id} className="flex justify-between border-b border-white/10 pb-1">
+                                        <span className="text-xs font-bold">#{p.number} {p.name}</span>
+                                        <span className={`text-[10px] font-black ${currentRoll[p.id] === 1 ? 'text-green-500' : 'text-red-500'}`}>
+                                            {currentRoll[p.id] === 1 ? 'V' : currentRoll[p.id] === 2 ? 'X' : '-'}
+                                        </span>
+                                    </div>
+                                ))}
                             </div>
-                            {['教練團', 'U10', 'U9'].map(group => (
-                                <div key={group} className="mb-6">
-                                    <div className="group-divider mb-3">
-                                        <h2 className="text-lg font-black italic text-yellow-400">{group}</h2>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                                        {groupedPlayers[group].map(p => (
-                                            <div key={p.id} className="flex justify-between items-center border-b border-white/5 pb-1">
-                                                <span className="text-xs font-bold text-slate-200">#{p.number} {p.name}</span>
-                                                <span className={`status-badge ${currentRoll[p.id] === 1 ? 'status-present' : currentRoll[p.id] === 2 ? 'status-absent' : 'status-none'}`}>
-                                                    {currentRoll[p.id] === 1 ? 'PRESENT' : currentRoll[p.id] === 2 ? 'ABSENT' : '-'}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))}
                         </div>
                     </div>
                 </div>
