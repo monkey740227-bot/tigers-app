@@ -6,25 +6,24 @@ import {
   Camera, 
   Plus, 
   Trash2, 
-  Edit2, 
-  Save, 
-  ChevronDown, 
-  ChevronUp,
-  Download
+  Download,
+  ShieldCheck,
+  Settings,
+  ChevronRight
 } from 'lucide-react';
 
-// 初始模擬數據
+// 初始數據結構
 const INITIAL_DATA = {
   u9: [
-    { id: 'u9-1', name: '小明', attendance: 'present', trainingStatus: '良好', note: '盤球進步明顯' },
-    { id: 'u9-2', name: '小華', attendance: 'absent', trainingStatus: '普通', note: '請感冒假' },
+    { id: 'u9-1', name: '林小明', attendance: 'present', trainingStatus: '良好', note: '盤球重心穩定' },
+    { id: 'u9-2', name: '陳小華', attendance: 'absent', trainingStatus: '普通', note: '感冒請假' }
   ],
   u10: [
-    { id: 'u10-1', name: '大強', attendance: 'present', trainingStatus: '優秀', note: '射門精準度極高' },
+    { id: 'u10-1', name: '張大強', attendance: 'present', trainingStatus: '優秀', note: '射門力道極佳' }
   ],
   coaches: [
-    { id: 'c1', name: '王教練', role: '總教練', status: '在場' },
-    { id: 'c2', name: '李教練', role: '助理教練', status: '在場' },
+    { id: 'c1', name: '王教練', role: '總教練' },
+    { id: 'c2', name: '李教練', role: '助理教練' }
   ]
 };
 
@@ -34,302 +33,210 @@ const App = () => {
   const [isCapturing, setIsCapturing] = useState(false);
   const captureRef = useRef(null);
 
-  // 動態載入 html2canvas
+  // 動態載入 html2canvas 以支援截圖
   useEffect(() => {
     const script = document.createElement('script');
     script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
     script.async = true;
     document.body.appendChild(script);
-    return () => {
-      document.body.removeChild(script);
-    };
+    return () => { document.body.removeChild(script); };
   }, []);
 
-  // --- 功能函式 ---
+  // --- 功能邏輯 ---
 
-  // 截圖功能 (修正版)
   const handleCapture = async () => {
-    if (!captureRef.current || !window.html2canvas) {
-      console.error("html2canvas 未載入");
-      return;
-    }
-    
+    if (!captureRef.current || !window.html2canvas) return;
     setIsCapturing(true);
-    // 延遲以確保 UI 狀態更新（隱藏按鈕等）
     setTimeout(async () => {
-      try {
-        const canvas = await window.html2canvas(captureRef.current, {
-          backgroundColor: '#f8fafc',
-          scale: 2,
-          useCORS: true,
-          logging: false,
-        });
-        const image = canvas.toDataURL("image/png");
-        const link = document.createElement('a');
-        link.href = image;
-        link.download = `足球隊點名回報_${new Date().toISOString().split('T')[0]}.png`;
-        link.click();
-      } catch (err) {
-        console.error("截圖失敗:", err);
-      } finally {
-        setIsCapturing(false);
-      }
-    }, 200);
+      const canvas = await window.html2canvas(captureRef.current, { backgroundColor: '#f1f5f9', scale: 2 });
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL("image/png");
+      link.download = `點名報表_${new Date().toISOString().split('T')[0]}.png`;
+      link.click();
+      setIsCapturing(false);
+    }, 300);
   };
 
-  // 變更出缺席
-  const toggleAttendance = (category, id) => {
-    const newData = { ...data };
-    const index = newData[category].findIndex(p => p.id === id);
-    const current = newData[category][index].attendance;
-    // 循環切換：出席 -> 缺席 -> 遲到 -> 出席
-    const nextStatus = current === 'present' ? 'absent' : (current === 'absent' ? 'late' : 'present');
-    newData[category][index].attendance = nextStatus;
-    setData(newData);
+  const updateStatus = (cat, id, field, value) => {
+    setData(prev => ({
+      ...prev,
+      [cat]: prev[cat].map(item => item.id === id ? { ...item, [field]: value } : item)
+    }));
   };
 
-  // 更新訓練狀況
-  const updateTraining = (category, id, field, value) => {
-    const newData = { ...data };
-    const index = newData[category].findIndex(p => p.id === id);
-    newData[category][index][field] = value;
-    setData(newData);
-  };
-
-  // 人員編輯
-  const addPerson = (category) => {
-    const name = prompt("請輸入姓名:");
+  const addPerson = (cat) => {
+    const name = prompt("輸入姓名:");
     if (!name) return;
-    const newData = { ...data };
-    const newItem = category === 'coaches' 
-      ? { id: `c-${Date.now()}`, name, role: '教練', status: '在場' }
-      : { id: `${category}-${Date.now()}`, name, attendance: 'present', trainingStatus: '普通', note: '' };
-    newData[category].push(newItem);
-    setData(newData);
+    const newItem = {
+      id: `${cat}-${Date.now()}`,
+      name,
+      attendance: 'present',
+      trainingStatus: '普通',
+      note: '',
+      role: cat === 'coaches' ? '教練' : '球員'
+    };
+    setData(prev => ({ ...prev, [cat]: [...prev[cat], newItem] }));
   };
 
-  const removePerson = (category, id) => {
-    if (!confirm("確定要刪除此人員嗎？")) return;
-    const newData = { ...data };
-    newData[category] = newData[category].filter(p => p.id !== id);
-    setData(newData);
+  const deletePerson = (cat, id) => {
+    if (confirm("確定刪除？")) {
+      setData(prev => ({ ...prev, [cat]: prev[cat].filter(i => i.id !== id) }));
+    }
   };
 
-  // --- 子組件 ---
+  // --- UI 組件 ---
 
-  const AttendanceView = () => (
-    <div ref={captureRef} className="p-4 space-y-6 bg-slate-50 min-h-screen">
-      <div className="flex justify-between items-center mb-2">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-800">點名與出缺席</h2>
-          <p className="text-sm text-slate-500">{new Date().toLocaleDateString()} 訓練課程</p>
-        </div>
-        {!isCapturing && (
-          <button 
-            onClick={handleCapture}
-            className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition shadow-md active:scale-95"
-          >
-            <Camera size={18} /> 截圖回報
-          </button>
-        )}
-      </div>
-
-      {['u9', 'u10', 'coaches'].map(cat => (
-        <div key={cat} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="bg-slate-800 text-white px-4 py-2 flex justify-between items-center">
-            <span className="font-bold uppercase tracking-wider">
-              {cat === 'u9' ? 'U9 梯隊' : cat === 'u10' ? 'U10 梯隊' : '教練團'}
-            </span>
-            <span className="text-xs bg-slate-700 px-2 py-1 rounded">人數: {data[cat].length}</span>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-4">
-            {data[cat].map(person => (
-              <div 
-                key={person.id}
-                onClick={() => cat !== 'coaches' && toggleAttendance(cat, person.id)}
-                className={`p-3 rounded-lg border-2 text-center transition-all duration-200 ${
-                  cat === 'coaches' ? 'border-slate-200 bg-slate-50 cursor-default' :
-                  person.attendance === 'present' ? 'border-green-500 bg-green-50 text-green-700' :
-                  person.attendance === 'late' ? 'border-yellow-500 bg-yellow-100 text-yellow-700' :
-                  'border-red-400 bg-red-50 text-red-600'
-                } ${cat !== 'coaches' ? 'cursor-pointer hover:scale-105 active:scale-95' : ''}`}
-              >
-                <div className="font-bold text-base truncate">{person.name}</div>
-                <div className="text-[10px] mt-1 font-medium">
-                  {cat === 'coaches' ? person.role : 
-                   (person.attendance === 'present' ? '✓ 出席' : 
-                    person.attendance === 'late' ? '△ 遲到' : '✕ 缺席')}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      
-      {isCapturing && (
-        <div className="text-center py-4 border-t border-dashed border-slate-300">
-          <p className="text-slate-400 text-xs italic">基石足球青訓管理系統 - 自動生成回報單</p>
-        </div>
+  const SectionHeader = ({ title, cat }) => (
+    <div className="flex justify-between items-center mb-3 px-1">
+      <h3 className="text-lg font-black text-slate-700 flex items-center gap-2">
+        <div className="w-2 h-6 bg-yellow-500 rounded-full"></div>
+        {title} <span className="text-sm font-normal text-slate-400">({data[cat].length})</span>
+      </h3>
+      {!isCapturing && (
+        <button onClick={() => addPerson(cat)} className="text-blue-600 p-1 hover:bg-blue-50 rounded">
+          <Plus size={20} />
+        </button>
       )}
     </div>
   );
 
-  const TrainingView = () => (
-    <div className="p-4 space-y-6 animate-in fade-in slide-in-from-bottom-4">
-      <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-        <Activity className="text-blue-600" /> 個人訓練評核
-      </h2>
-      {['u9', 'u10'].map(cat => (
-        <div key={cat} className="space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-1 bg-blue-500 rounded-full"></div>
-            <h3 className="text-lg font-bold text-slate-700 uppercase">{cat} 隊員清單</h3>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {data[cat].map(person => (
-              <div key={person.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-center mb-3">
-                  <span className="font-bold text-lg text-slate-800">{person.name}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">訓練表現:</span>
-                    <select 
-                      value={person.trainingStatus}
-                      onChange={(e) => updateTraining(cat, person.id, 'trainingStatus', e.target.value)}
-                      className="bg-blue-50 text-blue-700 border-none rounded-lg px-2 py-1 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+  return (
+    <div className="max-w-md mx-auto bg-slate-100 min-h-screen font-sans pb-24">
+      {/* Navbar */}
+      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b flex justify-around p-3 shadow-sm">
+        {[
+          { id: 'attendance', label: '點名', icon: UserCheck },
+          { id: 'training', label: '訓練', icon: Activity },
+          { id: 'manage', label: '編輯', icon: Settings }
+        ].map(tab => (
+          <button 
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-blue-600 scale-110' : 'text-slate-400'}`}
+          >
+            <tab.icon size={20} />
+            <span className="text-[10px] font-bold">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Main Content */}
+      <div ref={captureRef} className="p-4 space-y-8">
+        
+        {/* 1. 出缺席狀況 (點名) */}
+        {activeTab === 'attendance' && (
+          <div className="animate-in fade-in slide-in-from-top-2">
+            <div className="flex justify-between items-end mb-6">
+              <div>
+                <h1 className="text-2xl font-black text-slate-800">每日點名回報</h1>
+                <p className="text-xs text-slate-400">{new Date().toLocaleDateString()} 課程紀錄</p>
+              </div>
+              {!isCapturing && (
+                <button onClick={handleCapture} className="bg-slate-800 text-white p-3 rounded-full shadow-lg active:scale-95 transition">
+                  <Camera size={20} />
+                </button>
+              )}
+            </div>
+
+            {['u9', 'u10', 'coaches'].map(cat => (
+              <div key={cat} className="mb-8">
+                <SectionHeader title={cat.toUpperCase() + (cat === 'coaches' ? ' 教練組' : ' 梯隊')} cat={cat} />
+                <div className="grid grid-cols-3 gap-2">
+                  {data[cat].map(item => (
+                    <div 
+                      key={item.id}
+                      onClick={() => cat !== 'coaches' && updateStatus(cat, item.id, 'attendance', item.attendance === 'present' ? 'absent' : (item.attendance === 'absent' ? 'late' : 'present'))}
+                      className={`p-3 rounded-xl border-2 text-center transition-all ${
+                        cat === 'coaches' ? 'bg-white border-slate-200' :
+                        item.attendance === 'present' ? 'bg-green-50 border-green-500 text-green-700' :
+                        item.attendance === 'late' ? 'bg-yellow-50 border-yellow-500 text-yellow-700' :
+                        'bg-red-50 border-red-500 text-red-700'
+                      }`}
                     >
-                      <option value="優秀">優秀 ★★★</option>
-                      <option value="良好">良好 ★★</option>
-                      <option value="普通">普通 ★</option>
-                      <option value="待加強">待加強 ⚠</option>
-                      <option value="受傷恢復中">傷退/復健</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="relative">
-                  <textarea 
-                    placeholder="點擊輸入訓練觀察評語（如：盤球重心控制、傳球時機...）"
-                    className="w-full text-sm p-3 bg-slate-50 rounded-lg border border-slate-100 h-24 resize-none focus:bg-white focus:border-blue-200 focus:ring-0 transition-all"
-                    value={person.note}
-                    onChange={(e) => updateTraining(cat, person.id, 'note', e.target.value)}
-                  />
-                  <div className="absolute bottom-2 right-2 text-[10px] text-slate-300 italic">Auto-saving...</div>
+                      <div className="font-bold text-sm truncate">{item.name}</div>
+                      <div className="text-[10px] opacity-70">
+                        {cat === 'coaches' ? item.role : (item.attendance === 'present' ? '出席' : item.attendance === 'late' ? '遲到' : '缺席')}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
+            {isCapturing && <div className="text-center text-[10px] text-slate-400 mt-10 italic">基石足球系統自動生成</div>}
           </div>
-        </div>
-      ))}
-    </div>
-  );
+        )}
 
-  const ManagementView = () => (
-    <div className="p-4 space-y-6 animate-in fade-in">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-slate-800">核心成員管理</h2>
+        {/* 2. 個人訓練狀況 */}
+        {activeTab === 'training' && (
+          <div className="space-y-6 animate-in fade-in">
+            <h1 className="text-2xl font-black text-slate-800 mb-4">訓練評核紀錄</h1>
+            {['u9', 'u10'].map(cat => (
+              <div key={cat}>
+                <SectionHeader title={cat.toUpperCase() + " 訓練紀錄"} cat={cat} />
+                {data[cat].map(person => (
+                  <div key={person.id} className="bg-white p-4 rounded-2xl mb-3 shadow-sm border border-slate-100">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-bold text-slate-700">{person.name}</span>
+                      <select 
+                        value={person.trainingStatus}
+                        onChange={(e) => updateStatus(cat, person.id, 'trainingStatus', e.target.value)}
+                        className="text-xs bg-slate-50 border-none rounded-lg px-2 py-1 font-bold text-blue-600 outline-none"
+                      >
+                        <option value="優秀">優秀</option>
+                        <option value="良好">良好</option>
+                        <option value="普通">普通</option>
+                        <option value="待加強">待加強</option>
+                      </select>
+                    </div>
+                    <textarea 
+                      value={person.note}
+                      onChange={(e) => updateStatus(cat, person.id, 'note', e.target.value)}
+                      placeholder="輸入訓練觀察..."
+                      className="w-full text-xs p-2 bg-slate-50 rounded-lg h-16 resize-none border-none focus:ring-1 focus:ring-blue-100"
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 3. 人員管理編輯 */}
+        {activeTab === 'manage' && (
+          <div className="space-y-6 animate-in fade-in">
+             <h1 className="text-2xl font-black text-slate-800 mb-4">系統名單管理</h1>
+             {['u9', 'u10', 'coaches'].map(cat => (
+               <div key={cat} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-100">
+                 <div className="bg-slate-50 p-3 border-b flex justify-between items-center">
+                   <span className="font-bold text-slate-500 text-sm uppercase">{cat} List</span>
+                   <button onClick={() => addPerson(cat)} className="bg-blue-600 text-white p-1 rounded-md"><Plus size={14}/></button>
+                 </div>
+                 <div className="divide-y divide-slate-50">
+                    {data[cat].map(person => (
+                      <div key={person.id} className="p-3 flex justify-between items-center">
+                        <span className="font-medium text-slate-700">{person.name}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] text-slate-400">{cat === 'coaches' ? person.role : '學員'}</span>
+                          <button onClick={() => deletePerson(cat, person.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={16}/></button>
+                        </div>
+                      </div>
+                    ))}
+                 </div>
+               </div>
+             ))}
+          </div>
+        )}
+
       </div>
 
-      {['u9', 'u10', 'coaches'].map(cat => (
-        <div key={cat} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-            <h3 className="font-bold text-slate-700 uppercase">
-              {cat === 'u9' ? 'U9 梯隊' : cat === 'u10' ? 'U10 梯隊' : '教練團'}
-            </h3>
-            <button 
-              onClick={() => addPerson(cat)}
-              className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
-            >
-              <Plus size={16} /> 新增
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="text-slate-400 text-xs border-b border-slate-50">
-                  <th className="px-4 py-3 font-semibold uppercase">姓名</th>
-                  <th className="px-4 py-3 font-semibold uppercase">{cat === 'coaches' ? '職級' : '類型'}</th>
-                  <th className="px-4 py-3 font-semibold uppercase text-right">管理</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {data[cat].map(person => (
-                  <tr key={person.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-slate-700">{person.name}</td>
-                    <td className="px-4 py-3">
-                      <span className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-500">
-                        {cat === 'coaches' ? person.role : '一般學員'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button 
-                        onClick={() => removePerson(cat, person.id)}
-                        className="text-slate-300 hover:text-red-500 transition p-1"
-                        title="刪除"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {data[cat].length === 0 && (
-                  <tr>
-                    <td colSpan="3" className="px-4 py-8 text-center text-slate-400 text-sm">目前無人員資料</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
-  return (
-    <div className="max-w-4xl mx-auto bg-slate-50 min-h-screen relative shadow-2xl">
-      {/* 頂部導航 */}
-      <nav className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-3 flex justify-around items-center shadow-sm">
-        <button 
-          onClick={() => setActiveTab('attendance')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-lg transition-all ${activeTab === 'attendance' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:bg-slate-50'}`}
-        >
-          <UserCheck size={22} />
-          <span className="text-[10px] font-bold">點名回報</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab('training')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-lg transition-all ${activeTab === 'training' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:bg-slate-50'}`}
-        >
-          <Activity size={22} />
-          <span className="text-[10px] font-bold">訓練表現</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab('management')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-lg transition-all ${activeTab === 'management' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:bg-slate-50'}`}
-        >
-          <Users size={22} />
-          <span className="text-[10px] font-bold">名單編輯</span>
-        </button>
-      </nav>
-
-      {/* 內容區域 */}
-      <main className="pb-24">
-        {activeTab === 'attendance' && <AttendanceView />}
-        {activeTab === 'training' && <TrainingView />}
-        {activeTab === 'management' && <ManagementView />}
-      </main>
-
-      {/* 快速導出 FAB (只在點名頁顯示) */}
+      {/* Floating Download Button */}
       {activeTab === 'attendance' && !isCapturing && (
-        <div className="fixed bottom-6 right-6 z-30">
-          <button 
-            onClick={handleCapture}
-            className="bg-blue-600 text-white p-4 rounded-full shadow-lg hover:bg-blue-700 hover:scale-110 active:scale-95 transition-all flex items-center justify-center group"
-          >
-            <Download size={24} />
-            <span className="max-w-0 overflow-hidden group-hover:max-w-xs group-hover:ml-2 transition-all duration-300 text-sm font-bold whitespace-nowrap">
-              導出回報圖
-            </span>
-          </button>
-        </div>
+        <button 
+          onClick={handleCapture}
+          className="fixed bottom-6 right-6 bg-blue-600 text-white p-4 rounded-full shadow-2xl animate-bounce"
+        >
+          <Download size={24} />
+        </button>
       )}
     </div>
   );
