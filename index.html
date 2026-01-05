@@ -1,245 +1,315 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
 import { 
-  Users, 
-  UserCheck, 
-  Activity, 
-  Camera, 
-  Plus, 
-  Trash2, 
-  Download,
-  ShieldCheck,
-  Settings,
-  ChevronRight
+  getAuth, 
+  signInWithCustomToken, 
+  signInAnonymously, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  onSnapshot,
+  serverTimestamp 
+} from 'firebase/firestore';
+import { 
+  Users, UserCheck, Activity, Download, Plus, Trash2, ShieldCheck, AlertCircle, Loader2, ChevronRight
 } from 'lucide-react';
 
-// 初始數據結構
-const INITIAL_DATA = {
-  u9: [
-    { id: 'u9-1', name: '林小明', attendance: 'present', trainingStatus: '良好', note: '盤球重心穩定' },
-    { id: 'u9-2', name: '陳小華', attendance: 'absent', trainingStatus: '普通', note: '感冒請假' }
-  ],
-  u10: [
-    { id: 'u10-1', name: '張大強', attendance: 'present', trainingStatus: '優秀', note: '射門力道極佳' }
-  ],
-  coaches: [
-    { id: 'c1', name: '王教練', role: '總教練' },
-    { id: 'c2', name: '李教練', role: '助理教練' }
-  ]
-};
+// --- 核心配置 (由環境變數注入) ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-u12-pro';
 
-const App = () => {
-  const [data, setData] = useState(INITIAL_DATA);
+export default function App() {
+  // 系統狀態
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('attendance');
   const [isCapturing, setIsCapturing] = useState(false);
   const captureRef = useRef(null);
 
-  // 動態載入 html2canvas 以支援截圖
+  // 業務資料狀態
+  const [data, setData] = useState({
+    members: [],
+    coaches: [],
+    lastUpdated: null
+  });
+
+  // 1. 身份驗證與初始化 (規則 3)
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-    script.async = true;
-    document.body.appendChild(script);
-    return () => { document.body.removeChild(script); };
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth Error:", err);
+        setError("身份驗證失敗，請確認 Firebase 設定。");
+      }
+    };
+
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  // --- 功能邏輯 ---
+  // 2. 實時數據監聽 (規則 1: 嚴謹路徑)
+  useEffect(() => {
+    if (!user) return;
 
-  const handleCapture = async () => {
-    if (!captureRef.current || !window.html2canvas) return;
-    setIsCapturing(true);
-    setTimeout(async () => {
-      const canvas = await window.html2canvas(captureRef.current, { backgroundColor: '#f1f5f9', scale: 2 });
-      const link = document.createElement('a');
-      link.href = canvas.toDataURL("image/png");
-      link.download = `點名報表_${new Date().toISOString().split('T')[0]}.png`;
-      link.click();
-      setIsCapturing(false);
-    }, 300);
-  };
+    // 格式: /artifacts/{appId}/public/data/main/current
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
+    
+    const unsubscribe = onSnapshot(docRef, 
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setData(docSnap.data());
+        } else {
+          // 初始化雲端文檔
+          const initialData = { members: [], coaches: [], lastUpdated: new Date().toISOString() };
+          setDoc(docRef, initialData);
+          setData(initialData);
+        }
+        setError(null);
+      },
+      (err) => {
+        console.error("Firestore Error:", err);
+        setError(`權限不足或路徑錯誤 (Code: ${err.code})`);
+      }
+    );
 
-  const updateStatus = (cat, id, field, value) => {
-    setData(prev => ({
-      ...prev,
-      [cat]: prev[cat].map(item => item.id === id ? { ...item, [field]: value } : item)
-    }));
-  };
+    return () => unsubscribe();
+  }, [user]);
 
-  const addPerson = (cat) => {
-    const name = prompt("輸入姓名:");
-    if (!name) return;
-    const newItem = {
-      id: `${cat}-${Date.now()}`,
-      name,
-      attendance: 'present',
-      trainingStatus: '普通',
-      note: '',
-      role: cat === 'coaches' ? '教練' : '球員'
-    };
-    setData(prev => ({ ...prev, [cat]: [...prev[cat], newItem] }));
-  };
-
-  const deletePerson = (cat, id) => {
-    if (confirm("確定刪除？")) {
-      setData(prev => ({ ...prev, [cat]: prev[cat].filter(i => i.id !== id) }));
+  // 3. 數據同步函式
+  const persistData = async (newData) => {
+    if (!user) return;
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
+    try {
+      await setDoc(docRef, { ...newData, lastUpdated: new Date().toISOString() });
+    } catch (err) {
+      setError("儲存失敗，請檢查網路連線。");
     }
   };
 
-  // --- UI 組件 ---
+  // 4. 業務邏輯處理
+  const toggleAttendance = (id) => {
+    const newMembers = data.members.map(m => {
+      if (m.id === id) {
+        const states = ['present', 'absent', 'late'];
+        const nextIdx = (states.indexOf(m.status || 'present') + 1) % states.length;
+        return { ...m, status: states[nextIdx] };
+      }
+      return m;
+    });
+    const newData = { ...data, members: newMembers };
+    setData(newData); // 即時更新 UI
+    persistData(newData); // 非同步同步雲端
+  };
 
-  const SectionHeader = ({ title, cat }) => (
-    <div className="flex justify-between items-center mb-3 px-1">
-      <h3 className="text-lg font-black text-slate-700 flex items-center gap-2">
-        <div className="w-2 h-6 bg-yellow-500 rounded-full"></div>
-        {title} <span className="text-sm font-normal text-slate-400">({data[cat].length})</span>
-      </h3>
-      {!isCapturing && (
-        <button onClick={() => addPerson(cat)} className="text-blue-600 p-1 hover:bg-blue-50 rounded">
-          <Plus size={20} />
-        </button>
-      )}
+  const addPerson = (type) => {
+    const name = prompt(`請輸入${type === 'coaches' ? '教練' : '隊員'}姓名:`);
+    if (!name) return;
+    const newItem = {
+      id: `${type}-${Date.now()}`,
+      name,
+      status: 'present',
+      note: '',
+      role: type === 'coaches' ? 'Coach' : 'Player'
+    };
+    const newData = { ...data, [type]: [...data[type], newItem] };
+    persistData(newData);
+  };
+
+  const deletePerson = (type, id) => {
+    if (!window.confirm("確定移除此成員？")) return;
+    const newData = { ...data, [type]: data[type].filter(p => p.id !== id) };
+    persistData(newData);
+  };
+
+  const updateNote = (id, note) => {
+    const newMembers = data.members.map(m => m.id === id ? { ...m, note } : m);
+    persistData({ ...data, members: newMembers });
+  };
+
+  // 5. 截圖報表生成
+  const handleExport = async () => {
+    if (!captureRef.current) return;
+    setIsCapturing(true);
+    // 引入 html2canvas 腳本
+    if (!window.html2canvas) {
+      const script = document.createElement('script');
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      document.head.appendChild(script);
+      await new Promise(r => script.onload = r);
+    }
+    
+    setTimeout(async () => {
+      const canvas = await window.html2canvas(captureRef.current, { backgroundColor: '#f8fafc', scale: 2 });
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL("image/png");
+      link.download = `Tigers_Report_${new Date().toISOString().slice(0,10)}.png`;
+      link.click();
+      setIsCapturing(false);
+    }, 100);
+  };
+
+  if (loading) return (
+    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+      <Loader2 className="animate-spin text-yellow-500 mb-4" size={40} />
+      <p className="font-bold tracking-widest text-sm italic">TIGERS CLOUD CONNECTING...</p>
     </div>
   );
 
   return (
-    <div className="max-w-md mx-auto bg-slate-100 min-h-screen font-sans pb-24">
-      {/* Navbar */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b flex justify-around p-3 shadow-sm">
+    <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 pb-20">
+      {/* Header */}
+      <header className="bg-slate-900 text-white p-6 rounded-b-[2.5rem] shadow-xl">
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-2xl font-black italic tracking-tighter text-yellow-500">MEI-YU TIGERS</h1>
+            <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mt-1">
+              {appId} / {new Date().toLocaleDateString('zh-TW')}
+            </p>
+          </div>
+          <div className="bg-slate-800 p-2 rounded-full">
+            <ShieldCheck size={20} className="text-green-400" />
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-4 bg-red-500/20 border border-red-500/50 p-3 rounded-xl flex items-center gap-2 text-xs text-red-200">
+            <AlertCircle size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+      </header>
+
+      {/* Tabs */}
+      <nav className="flex px-6 -mt-6 gap-2">
         {[
           { id: 'attendance', label: '點名', icon: UserCheck },
-          { id: 'training', label: '訓練', icon: Activity },
-          { id: 'manage', label: '編輯', icon: Settings }
+          { id: 'training', label: '表現', icon: Activity },
+          { id: 'manage', label: '名單', icon: Users }
         ].map(tab => (
-          <button 
+          <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-blue-600 scale-110' : 'text-slate-400'}`}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-bold text-sm transition-all shadow-lg ${
+              activeTab === tab.id ? 'bg-yellow-500 text-slate-900 scale-105' : 'bg-white text-slate-400'
+            }`}
           >
-            <tab.icon size={20} />
-            <span className="text-[10px] font-bold">{tab.label}</span>
+            <tab.icon size={16} />
+            {tab.label}
           </button>
         ))}
       </nav>
 
       {/* Main Content */}
-      <div ref={captureRef} className="p-4 space-y-8">
-        
-        {/* 1. 出缺席狀況 (點名) */}
+      <main ref={captureRef} className="flex-1 p-6 space-y-8">
         {activeTab === 'attendance' && (
-          <div className="animate-in fade-in slide-in-from-top-2">
-            <div className="flex justify-between items-end mb-6">
-              <div>
-                <h1 className="text-2xl font-black text-slate-800">每日點名回報</h1>
-                <p className="text-xs text-slate-400">{new Date().toLocaleDateString()} 課程紀錄</p>
-              </div>
+          <section className="animate-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-black text-slate-800 flex items-center gap-2">
+                今日出席 <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full">{data.members.filter(m => m.status === 'present').length}/{data.members.length}</span>
+              </h2>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3">
+              {data.members.map(member => (
+                <button
+                  key={member.id}
+                  onClick={() => toggleAttendance(member.id)}
+                  className={`p-3 rounded-2xl border-2 transition-all flex flex-col items-center gap-1 ${
+                    member.status === 'present' ? 'bg-white border-green-500 text-green-700' :
+                    member.status === 'late' ? 'bg-yellow-50 border-yellow-400 text-yellow-700' :
+                    'bg-red-50 border-red-200 text-red-400 opacity-60'
+                  }`}
+                >
+                  <span className="font-black text-xs truncate w-full">{member.name}</span>
+                  <span className="text-[8px] font-bold uppercase tracking-tighter">
+                    {member.status === 'present' ? '在席' : member.status === 'late' ? '遲到' : '缺席'}
+                  </span>
+                </button>
+              ))}
               {!isCapturing && (
-                <button onClick={handleCapture} className="bg-slate-800 text-white p-3 rounded-full shadow-lg active:scale-95 transition">
-                  <Camera size={20} />
+                <button onClick={() => addPerson('members')} className="border-2 border-dashed border-slate-300 rounded-2xl flex items-center justify-center text-slate-300 h-16">
+                  <Plus size={20} />
                 </button>
               )}
             </div>
+          </section>
+        )}
 
-            {['u9', 'u10', 'coaches'].map(cat => (
-              <div key={cat} className="mb-8">
-                <SectionHeader title={cat.toUpperCase() + (cat === 'coaches' ? ' 教練組' : ' 梯隊')} cat={cat} />
-                <div className="grid grid-cols-3 gap-2">
-                  {data[cat].map(item => (
-                    <div 
-                      key={item.id}
-                      onClick={() => cat !== 'coaches' && updateStatus(cat, item.id, 'attendance', item.attendance === 'present' ? 'absent' : (item.attendance === 'absent' ? 'late' : 'present'))}
-                      className={`p-3 rounded-xl border-2 text-center transition-all ${
-                        cat === 'coaches' ? 'bg-white border-slate-200' :
-                        item.attendance === 'present' ? 'bg-green-50 border-green-500 text-green-700' :
-                        item.attendance === 'late' ? 'bg-yellow-50 border-yellow-500 text-yellow-700' :
-                        'bg-red-50 border-red-500 text-red-700'
-                      }`}
-                    >
-                      <div className="font-bold text-sm truncate">{item.name}</div>
-                      <div className="text-[10px] opacity-70">
-                        {cat === 'coaches' ? item.role : (item.attendance === 'present' ? '出席' : item.attendance === 'late' ? '遲到' : '缺席')}
-                      </div>
+        {activeTab === 'training' && (
+          <section className="space-y-4 animate-in fade-in duration-500">
+            <h2 className="font-black text-slate-800">教練技術筆記</h2>
+            {data.members.map(member => (
+              <div key={member.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-black text-slate-700">{member.name}</span>
+                  <div className={`w-2 h-2 rounded-full ${member.status === 'present' ? 'bg-green-500' : 'bg-red-400'}`}></div>
+                </div>
+                <textarea
+                  value={member.note || ''}
+                  onChange={(e) => updateNote(member.id, e.target.value)}
+                  placeholder="紀錄球員今日表現..."
+                  className="w-full text-xs bg-slate-50 rounded-xl p-3 border-none focus:ring-1 focus:ring-yellow-500 h-20 resize-none"
+                />
+              </div>
+            ))}
+          </section>
+        )}
+
+        {activeTab === 'manage' && (
+          <section className="space-y-6 animate-in fade-in duration-500">
+            {['coaches', 'members'].map(type => (
+              <div key={type} className="bg-white rounded-3xl overflow-hidden border border-slate-100 shadow-sm">
+                <div className="p-4 bg-slate-50 border-b flex justify-between items-center">
+                  <span className="font-black text-[10px] uppercase tracking-widest text-slate-400">{type === 'coaches' ? 'Coach Staff' : 'Squad Roster'}</span>
+                  <button onClick={() => addPerson(type)} className="text-blue-500"><Plus size={18}/></button>
+                </div>
+                <div className="divide-y divide-slate-50">
+                  {data[type].map(person => (
+                    <div key={person.id} className="p-4 flex justify-between items-center">
+                      <span className="font-bold text-slate-700">{person.name}</span>
+                      <button onClick={() => deletePerson(type, person.id)} className="text-slate-300 hover:text-red-500 transition-colors">
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   ))}
                 </div>
               </div>
             ))}
-            {isCapturing && <div className="text-center text-[10px] text-slate-400 mt-10 italic">基石足球系統自動生成</div>}
-          </div>
+          </section>
         )}
+      </main>
 
-        {/* 2. 個人訓練狀況 */}
-        {activeTab === 'training' && (
-          <div className="space-y-6 animate-in fade-in">
-            <h1 className="text-2xl font-black text-slate-800 mb-4">訓練評核紀錄</h1>
-            {['u9', 'u10'].map(cat => (
-              <div key={cat}>
-                <SectionHeader title={cat.toUpperCase() + " 訓練紀錄"} cat={cat} />
-                {data[cat].map(person => (
-                  <div key={person.id} className="bg-white p-4 rounded-2xl mb-3 shadow-sm border border-slate-100">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="font-bold text-slate-700">{person.name}</span>
-                      <select 
-                        value={person.trainingStatus}
-                        onChange={(e) => updateStatus(cat, person.id, 'trainingStatus', e.target.value)}
-                        className="text-xs bg-slate-50 border-none rounded-lg px-2 py-1 font-bold text-blue-600 outline-none"
-                      >
-                        <option value="優秀">優秀</option>
-                        <option value="良好">良好</option>
-                        <option value="普通">普通</option>
-                        <option value="待加強">待加強</option>
-                      </select>
-                    </div>
-                    <textarea 
-                      value={person.note}
-                      onChange={(e) => updateStatus(cat, person.id, 'note', e.target.value)}
-                      placeholder="輸入訓練觀察..."
-                      className="w-full text-xs p-2 bg-slate-50 rounded-lg h-16 resize-none border-none focus:ring-1 focus:ring-blue-100"
-                    />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* 3. 人員管理編輯 */}
-        {activeTab === 'manage' && (
-          <div className="space-y-6 animate-in fade-in">
-             <h1 className="text-2xl font-black text-slate-800 mb-4">系統名單管理</h1>
-             {['u9', 'u10', 'coaches'].map(cat => (
-               <div key={cat} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-100">
-                 <div className="bg-slate-50 p-3 border-b flex justify-between items-center">
-                   <span className="font-bold text-slate-500 text-sm uppercase">{cat} List</span>
-                   <button onClick={() => addPerson(cat)} className="bg-blue-600 text-white p-1 rounded-md"><Plus size={14}/></button>
-                 </div>
-                 <div className="divide-y divide-slate-50">
-                    {data[cat].map(person => (
-                      <div key={person.id} className="p-3 flex justify-between items-center">
-                        <span className="font-medium text-slate-700">{person.name}</span>
-                        <div className="flex items-center gap-3">
-                          <span className="text-[10px] text-slate-400">{cat === 'coaches' ? person.role : '學員'}</span>
-                          <button onClick={() => deletePerson(cat, person.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={16}/></button>
-                        </div>
-                      </div>
-                    ))}
-                 </div>
-               </div>
-             ))}
-          </div>
-        )}
-
-      </div>
-
-      {/* Floating Download Button */}
+      {/* Floating Action Button */}
       {activeTab === 'attendance' && !isCapturing && (
-        <button 
-          onClick={handleCapture}
-          className="fixed bottom-6 right-6 bg-blue-600 text-white p-4 rounded-full shadow-2xl animate-bounce"
+        <button
+          onClick={handleExport}
+          className="fixed bottom-6 right-6 bg-slate-900 text-white p-4 rounded-full shadow-2xl hover:scale-110 active:scale-90 transition-all z-50"
         >
           <Download size={24} />
         </button>
       )}
+
+      {/* Footer Branding */}
+      <footer className="p-8 text-center">
+        <p className="text-[10px] font-black text-slate-300 tracking-[0.2em] uppercase">Powered by Football Pro System</p>
+      </footer>
     </div>
   );
-};
-
-export default App;
+}
