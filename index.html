@@ -27,7 +27,6 @@
         .status-absent { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
         .status-none { background: rgba(100, 116, 139, 0.1); color: #64748b; }
         .group-divider { border-left: 4px solid #eab308; padding-left: 12px; margin: 24px 0 12px 0; }
-        /* 確保輸入框在所有設備都不會產生溢出 */
         input, select, textarea { max-width: 100%; box-sizing: border-box; }
     </style>
 </head>
@@ -90,6 +89,7 @@
             }, [user]);
 
             const currentRoll = useMemo(() => dailyRecords[selectedDate]?.roll || {}, [dailyRecords, selectedDate]);
+            const currentComments = useMemo(() => dailyRecords[selectedDate]?.comments || {}, [dailyRecords, selectedDate]);
 
             const groupedPlayers = useMemo(() => {
                 return {
@@ -109,12 +109,14 @@
                 updateDaily('roll', { ...currentRoll, [pId]: newStatus });
             };
 
+            const updateComment = (pId, text) => {
+                updateDaily('comments', { ...currentComments, [pId]: text });
+            };
+
             const handleAddPlayer = async (e) => {
                 e.preventDefault();
                 if (!newPlayerName.trim()) return;
-                
                 const lastOrder = players.length > 0 ? Math.max(...players.map(p => p.order || 0)) : 0;
-                
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members').add({
                     name: newPlayerName.trim(),
                     number: newPlayerNumber.trim() || "00",
@@ -122,10 +124,23 @@
                     order: lastOrder + 1,
                     createdAt: Date.now()
                 });
-
-                setNewPlayerName('');
-                setNewPlayerNumber('');
+                setNewPlayerName(''); setNewPlayerNumber('');
             };
+
+            // 計算個人當月表現
+            const playerMonthlyHistory = useMemo(() => {
+                if (!searchResult) return [];
+                const currentMonth = selectedDate.substring(0, 7); // YYYY-MM
+                return Object.entries(dailyRecords)
+                    .filter(([date]) => date.startsWith(currentMonth))
+                    .map(([date, data]) => ({
+                        date,
+                        status: data.roll?.[searchResult.id],
+                        comment: data.comments?.[searchResult.id]
+                    }))
+                    .filter(item => item.comment || item.status)
+                    .sort((a, b) => b.date.localeCompare(a.date));
+            }, [dailyRecords, searchResult, selectedDate]);
 
             const captureFullReport = async () => {
                 setIsCapturing(true);
@@ -176,7 +191,7 @@
                         {view === 'parent' ? (
                             <div className="space-y-6">
                                 <div className="tiger-gradient p-8 rounded-[2.5rem] text-center border border-white/5 shadow-2xl">
-                                    <h2 className="text-xl font-black mb-6 italic tracking-widest uppercase text-yellow-500 text-sm">Individual Search</h2>
+                                    <h2 className="text-xl font-black mb-6 italic tracking-widest uppercase text-yellow-500 text-xs">Individual Performance</h2>
                                     <input 
                                         type="text" 
                                         placeholder="輸入球員姓名" 
@@ -185,15 +200,32 @@
                                         className="w-full bg-slate-950 p-4 rounded-2xl text-center text-xl font-bold border border-slate-800 mb-4 outline-none focus:border-yellow-500" 
                                     />
                                     <button onClick={() => setSearchResult(players.find(p => p.name === searchName))}
-                                        className="w-full bg-yellow-500 text-black font-black py-4 rounded-2xl active:scale-95 transition-all">搜尋個人紀錄</button>
+                                        className="w-full bg-yellow-500 text-black font-black py-4 rounded-2xl active:scale-95 transition-all">搜尋個人表現</button>
                                 </div>
                                 {searchResult && (
-                                    <div className="bg-slate-900 rounded-[2.5rem] p-6 border border-yellow-500/20 shadow-xl text-center">
-                                        <div className="text-yellow-500 font-black italic text-xs mb-1">#{searchResult.number} | {searchResult.group}</div>
-                                        <h3 className="text-3xl font-black mb-4">{searchResult.name}</h3>
-                                        <div className="bg-slate-950 p-6 rounded-3xl border border-white/5">
-                                            <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Attendance Rate</div>
-                                            <div className="text-5xl font-black text-yellow-500 italic">85%</div>
+                                    <div className="space-y-4">
+                                        <div className="bg-slate-900 rounded-[2.5rem] p-6 border border-yellow-500/20 shadow-xl text-center">
+                                            <div className="text-yellow-500 font-black italic text-xs mb-1">#{searchResult.number} | {searchResult.group}</div>
+                                            <h3 className="text-3xl font-black mb-4">{searchResult.name}</h3>
+                                            <div className="text-[10px] text-slate-500 font-bold uppercase mb-2">本月表現與紀錄</div>
+                                            
+                                            <div className="space-y-3 mt-4 text-left">
+                                                {playerMonthlyHistory.length > 0 ? playerMonthlyHistory.map(h => (
+                                                    <div key={h.date} className="bg-slate-950 p-4 rounded-2xl border border-white/5">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <span className="text-[10px] font-bold text-slate-500">{h.date}</span>
+                                                            <span className={`text-[9px] px-2 py-0.5 rounded font-black ${h.status === 1 ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
+                                                                {h.status === 1 ? '出席' : '缺席'}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-sm text-slate-200 leading-relaxed italic">
+                                                            {h.comment || "今日表現穩定，持續加油！"}
+                                                        </p>
+                                                    </div>
+                                                )) : (
+                                                    <div className="text-center py-10 text-slate-600 text-xs italic">本月尚無紀錄</div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -207,52 +239,42 @@
                                     </div>
                                     <button onClick={captureFullReport} className="w-full bg-green-600 text-white py-3 rounded-2xl text-xs font-black uppercase flex justify-center items-center gap-2 active:scale-95 transition-all">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                        產生「三組全開」長圖報表
+                                        產生「僅出缺席」點名長圖
                                     </button>
                                 </div>
 
-                                {/* 快速新增區域 - 優化手機響應式寬度 */}
                                 <div className="bg-slate-900/50 p-4 rounded-3xl border border-dashed border-slate-800">
                                     <h4 className="text-[10px] font-black text-slate-600 uppercase mb-3 px-1 tracking-widest">Quick Add Member</h4>
                                     <form onSubmit={handleAddPlayer} className="flex flex-row gap-2 w-full">
-                                        <input 
-                                            type="text" 
-                                            lang="zh-TW" 
-                                            placeholder="姓名" 
-                                            value={newPlayerName}
-                                            onChange={e => setNewPlayerName(e.target.value)}
-                                            autoCapitalize="none"
-                                            autoCorrect="off"
-                                            className="min-w-0 flex-[2.5] bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 focus:border-yellow-500/50 outline-none" 
-                                        />
-                                        <input 
-                                            type="text" 
-                                            inputMode="numeric"
-                                            placeholder="背號" 
-                                            value={newPlayerNumber}
-                                            onChange={e => setNewPlayerNumber(e.target.value)}
-                                            className="min-w-0 flex-1 bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 focus:border-yellow-500/50 outline-none text-center" 
-                                        />
-                                        <button type="submit" className="shrink-0 bg-white text-black px-4 py-3 rounded-xl active:scale-95 transition-all flex items-center justify-center">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 5v14M5 12h14"/></svg>
-                                        </button>
+                                        <input type="text" placeholder="姓名" value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)} className="min-w-0 flex-[2.5] bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 outline-none" />
+                                        <input type="text" placeholder="背號" value={newPlayerNumber} onChange={e => setNewPlayerNumber(e.target.value)} className="min-w-0 flex-1 bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 outline-none text-center" />
+                                        <button type="submit" className="shrink-0 bg-white text-black px-4 py-3 rounded-xl active:scale-95 transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 5v14M5 12h14"/></svg></button>
                                     </form>
                                 </div>
 
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                     <h3 className="px-2 text-[10px] font-black text-yellow-500 italic uppercase">Editing: {activeGroup}</h3>
                                     {(groupedPlayers[activeGroup] || []).map(p => {
                                         const status = currentRoll[p.id] || 0;
                                         return (
-                                            <div key={p.id} className="bg-slate-900 rounded-2xl border border-white/5 flex justify-between items-center p-3">
-                                                <div className="flex items-center gap-3 pl-2">
-                                                    <div className="w-7 h-7 bg-slate-950 rounded-full flex items-center justify-center font-black text-yellow-500 italic text-[10px]">#{p.number}</div>
-                                                    <span className="font-bold text-sm">{p.name}</span>
+                                            <div key={p.id} className="bg-slate-900 rounded-3xl border border-white/5 p-4 space-y-3">
+                                                <div className="flex justify-between items-center">
+                                                    <div className="flex items-center gap-3 pl-2">
+                                                        <div className="w-7 h-7 bg-slate-950 rounded-full flex items-center justify-center font-black text-yellow-500 italic text-[10px]">#{p.number}</div>
+                                                        <span className="font-bold text-sm">{p.name}</span>
+                                                    </div>
+                                                    <div className="flex gap-1">
+                                                        <button onClick={() => toggleStatus(p.id, 1)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 1 ? 'bg-green-600 text-white' : 'bg-slate-950 text-slate-800'}`}>出</button>
+                                                        <button onClick={() => toggleStatus(p.id, 2)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 2 ? 'bg-red-600 text-white' : 'bg-slate-950 text-slate-800'}`}>缺</button>
+                                                    </div>
                                                 </div>
-                                                <div className="flex gap-1">
-                                                    <button onClick={() => toggleStatus(p.id, 1)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 1 ? 'bg-green-600 text-white' : 'bg-slate-950 text-slate-800'}`}>出</button>
-                                                    <button onClick={() => toggleStatus(p.id, 2)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 2 ? 'bg-red-600 text-white' : 'bg-slate-950 text-slate-800'}`}>缺</button>
-                                                </div>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="今日表現紀錄 (家長可見)" 
+                                                    value={currentComments[p.id] || ''}
+                                                    onChange={e => updateComment(p.id, e.target.value)}
+                                                    className="w-full bg-slate-950/50 p-2.5 rounded-xl text-xs text-slate-400 italic border border-transparent focus:border-yellow-500/30 outline-none"
+                                                />
                                             </div>
                                         )
                                     })}
@@ -261,6 +283,7 @@
                         )}
                     </main>
 
+                    {/* 隱藏報表生成區：不包含個人表現 */}
                     <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
                         <div ref={allReportRef} className="report-preview">
                             <div className="text-center mb-10 border-b border-white/5 pb-10">
@@ -295,13 +318,12 @@
 
                             <div className="mt-16 text-center pt-8 border-t border-white/5">
                                 <p className="text-[10px] text-slate-500 font-black tracking-[0.4em] uppercase italic">Consistency Is Key</p>
-                                <p className="text-[8px] text-slate-800 mt-2">© 美育虎體育教育系統</p>
                             </div>
                         </div>
                     </div>
 
                     <footer className="fixed bottom-0 inset-x-0 p-4 bg-slate-950/80 backdrop-blur-md border-t border-white/5 text-center">
-                        <div className="text-[8px] text-slate-800 font-black tracking-widest uppercase italic">Meiyu Tigers Performance Hub 2.4</div>
+                        <div className="text-[8px] text-slate-800 font-black tracking-widest uppercase italic">Meiyu Tigers Performance Hub 2.5</div>
                     </footer>
                 </div>
             );
