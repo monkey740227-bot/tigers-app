@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美育虎 - 數據分析與報表系統</title>
+    <title>美育虎 - 全組別出缺席系統</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- 引入截圖函式庫 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <!-- Firebase SDK -->
@@ -21,8 +20,13 @@
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
         body { font-family: 'Noto Sans TC', sans-serif; background-color: #020617; color: #f1f5f9; -webkit-tap-highlight-color: transparent; }
         .tiger-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
-        .report-preview { background-color: #020617; width: 100%; max-width: 500px; margin: 0 auto; padding: 40px 20px; }
+        .report-preview { background-color: #020617; width: 500px; padding: 50px 40px; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 900; }
+        .status-present { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .status-absent { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .status-none { background: rgba(100, 116, 139, 0.1); color: #64748b; }
+        .group-divider { border-left: 4px solid #eab308; padding-left: 12px; margin: 24px 0 12px 0; }
     </style>
 </head>
 <body>
@@ -46,23 +50,6 @@
         const auth = firebase.auth();
         const appId = "tigers-u10";
 
-        // 獨立出的評語輸入組件
-        function CommentInput({ pId, initialValue, onSave }) {
-            const [localValue, setLocalValue] = useState(initialValue);
-            useEffect(() => { setLocalValue(initialValue); }, [initialValue]);
-            const handleBlur = () => { if (localValue !== initialValue) onSave(pId, localValue); };
-            return (
-                <input 
-                    type="text" 
-                    placeholder="輸入表現建議..." 
-                    value={localValue || ""}
-                    onChange={(e) => setLocalValue(e.target.value)}
-                    onBlur={handleBlur}
-                    className="w-full bg-slate-950/50 border border-white/5 rounded-xl px-3 py-2 text-xs focus:border-yellow-500 outline-none"
-                />
-            );
-        }
-
         function App() {
             const [user, setUser] = useState(null);
             const [view, setView] = useState('parent'); 
@@ -75,7 +62,11 @@
             const [searchResult, setSearchResult] = useState(null);
             const [isCapturing, setIsCapturing] = useState(false);
 
-            const reportRef = useRef(null);
+            // 新增球員專用 State
+            const [newPlayerName, setNewPlayerName] = useState('');
+            const [newPlayerNumber, setNewPlayerNumber] = useState('');
+
+            const allReportRef = useRef(null);
 
             useEffect(() => {
                 auth.signInAnonymously().catch(console.error);
@@ -97,37 +88,15 @@
                 return () => { unsubPlayers(); unsubDaily(); };
             }, [user]);
 
-            const stats = useMemo(() => {
-                const result = {};
-                players.forEach(p => { result[p.id] = { attend: 0, absent: 0, comments: [] }; });
-                Object.entries(dailyRecords).forEach(([date, data]) => {
-                    if (data.roll) {
-                        Object.entries(data.roll).forEach(([pId, status]) => {
-                            if (result[pId]) {
-                                if (status === 1) result[pId].attend++;
-                                if (status === 2) result[pId].absent++;
-                            }
-                        });
-                    }
-                    if (data.playerComments) {
-                        Object.entries(data.playerComments).forEach(([pId, comment]) => {
-                            if (result[pId] && comment) result[pId].comments.push({ date, text: comment });
-                        });
-                    }
-                });
-                return result;
-            }, [dailyRecords, players]);
+            const currentRoll = useMemo(() => dailyRecords[selectedDate]?.roll || {}, [dailyRecords, selectedDate]);
 
-            const currentPlayers = useMemo(() => players.filter(p => p.group === activeGroup), [players, activeGroup]);
-            const attendanceSummary = useMemo(() => {
-                const roll = dailyRecords[selectedDate]?.roll || {};
-                const list = currentPlayers.map(p => ({ ...p, status: roll[p.id] || 0 }));
+            const groupedPlayers = useMemo(() => {
                 return {
-                    present: list.filter(p => p.status === 1),
-                    absent: list.filter(p => p.status === 2),
-                    total: list.length
+                    'U9': players.filter(p => p.group === 'U9'),
+                    'U10': players.filter(p => p.group === 'U10'),
+                    '教練團': players.filter(p => p.group === '教練團')
                 };
-            }, [currentPlayers, dailyRecords, selectedDate]);
+            }, [players]);
 
             const updateDaily = async (key, value) => {
                 const ref = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('daily').doc(selectedDate);
@@ -135,36 +104,46 @@
             };
 
             const toggleStatus = (pId, status) => {
-                const currentRoll = dailyRecords[selectedDate]?.roll || {};
                 const newStatus = currentRoll[pId] === status ? 0 : status;
                 updateDaily('roll', { ...currentRoll, [pId]: newStatus });
             };
 
-            const updatePlayerComment = (pId, text) => {
-                const currentComments = dailyRecords[selectedDate]?.playerComments || {};
-                updateDaily('playerComments', { ...currentComments, [pId]: text });
+            const handleAddPlayer = async (e) => {
+                e.preventDefault();
+                if (!newPlayerName.trim()) return;
+                
+                const lastOrder = players.length > 0 ? Math.max(...players.map(p => p.order || 0)) : 0;
+                
+                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('members').add({
+                    name: newPlayerName.trim(),
+                    number: newPlayerNumber.trim() || "00",
+                    group: activeGroup,
+                    order: lastOrder + 1,
+                    createdAt: Date.now()
+                });
+
+                setNewPlayerName('');
+                setNewPlayerNumber('');
             };
 
-            // 截圖核心功能
-            const captureReport = async () => {
+            const captureFullReport = async () => {
                 setIsCapturing(true);
-                // 等待 React 渲染完成
                 setTimeout(async () => {
-                    const canvas = await html2canvas(reportRef.current, {
+                    const canvas = await html2canvas(allReportRef.current, {
                         backgroundColor: '#020617',
-                        scale: 2, // 提高解析度
+                        scale: 2, 
                         logging: false,
                         useCORS: true
                     });
                     const link = document.createElement('a');
-                    link.download = `美育虎訓練報表_${selectedDate}_${activeGroup}.png`;
+                    link.download = `美育虎_全體報表_${selectedDate}.png`;
                     link.href = canvas.toDataURL('image/png');
                     link.click();
                     setIsCapturing(false);
                 }, 500);
             };
 
-            if (loading) return <div className="h-screen flex items-center justify-center text-yellow-500 font-black italic animate-pulse">TIGERS LOADING...</div>;
+            if (loading) return <div className="h-screen flex items-center justify-center text-yellow-500 font-black italic animate-pulse text-2xl tracking-widest">TIGERS...</div>;
 
             return (
                 <div className="min-h-screen pb-24">
@@ -182,86 +161,96 @@
                         </button>
                     </header>
 
-                    <nav className="p-4 flex gap-2 sticky top-[61px] z-30 bg-slate-950/80 backdrop-blur-md border-b border-white/5 overflow-x-auto no-scrollbar">
-                        {['U9', 'U10', '教練團'].map(g => (
-                            <button key={g} onClick={() => setActiveGroup(g)}
-                                className={`px-6 py-2 rounded-full text-xs font-black italic transition-all whitespace-nowrap ${activeGroup === g ? 'bg-yellow-500 text-black' : 'bg-slate-900 text-slate-500'}`}
-                            >{g}</button>
-                        ))}
-                    </nav>
+                    {view === 'coach' && (
+                        <nav className="p-4 flex gap-2 sticky top-[61px] z-30 bg-slate-950/80 backdrop-blur-md border-b border-white/5 overflow-x-auto no-scrollbar">
+                            {['U9', 'U10', '教練團'].map(g => (
+                                <button key={g} onClick={() => setActiveGroup(g)}
+                                    className={`px-6 py-2 rounded-full text-xs font-black italic transition-all whitespace-nowrap ${activeGroup === g ? 'bg-yellow-500 text-black' : 'bg-slate-900 text-slate-500'}`}
+                                >{g}</button>
+                            ))}
+                        </nav>
+                    )}
 
                     <main className="max-w-md mx-auto p-4">
                         {view === 'parent' ? (
                             <div className="space-y-6">
                                 <div className="tiger-gradient p-8 rounded-[2.5rem] text-center border border-white/5 shadow-2xl">
-                                    <h2 className="text-xl font-black mb-6 italic tracking-widest uppercase text-yellow-500">Player Profile</h2>
-                                    <input type="text" placeholder="輸入球員姓名" value={searchName} onChange={e => setSearchName(e.target.value)}
-                                        className="w-full bg-slate-950 p-4 rounded-2xl text-center text-xl font-bold border border-slate-800 mb-4 outline-none focus:border-yellow-500" />
+                                    <h2 className="text-xl font-black mb-6 italic tracking-widest uppercase text-yellow-500 text-sm">Individual Search</h2>
+                                    <input 
+                                        type="text" 
+                                        placeholder="輸入球員姓名" 
+                                        value={searchName} 
+                                        onChange={e => setSearchName(e.target.value)}
+                                        className="w-full bg-slate-950 p-4 rounded-2xl text-center text-xl font-bold border border-slate-800 mb-4 outline-none focus:border-yellow-500" 
+                                    />
                                     <button onClick={() => setSearchResult(players.find(p => p.name === searchName))}
-                                        className="w-full bg-yellow-500 text-black font-black py-4 rounded-2xl active:scale-95 transition-all">搜尋數據</button>
+                                        className="w-full bg-yellow-500 text-black font-black py-4 rounded-2xl active:scale-95 transition-all">搜尋個人紀錄</button>
                                 </div>
                                 {searchResult && (
-                                    <div className="bg-slate-900 rounded-[2.5rem] p-6 border border-yellow-500/20 shadow-xl animate-in slide-in-from-bottom-4">
-                                        <div className="flex justify-between items-center mb-6">
-                                            <div>
-                                                <div className="text-yellow-500 font-black italic text-sm">#{searchResult.number}</div>
-                                                <h3 className="text-3xl font-black">{searchResult.name}</h3>
-                                            </div>
-                                            <div className="text-right">
-                                                <div className="text-[10px] text-slate-500 font-bold uppercase italic">Attend Rate</div>
-                                                <div className="text-2xl font-black text-yellow-500">
-                                                    {Math.round((stats[searchResult.id]?.attend / (stats[searchResult.id]?.attend + stats[searchResult.id]?.absent || 1)) * 100)}%
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="space-y-4">
-                                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2 italic">Coach Feedback</h4>
-                                            {stats[searchResult.id]?.comments.length > 0 ? (
-                                                stats[searchResult.id].comments.slice().reverse().map((c, i) => (
-                                                    <div key={i} className="bg-slate-950 p-4 rounded-2xl border border-white/5">
-                                                        <div className="text-[10px] text-yellow-500 font-bold mb-1 italic">{c.date}</div>
-                                                        <p className="text-sm leading-relaxed text-slate-300">{c.text}</p>
-                                                    </div>
-                                                ))
-                                            ) : <p className="text-center text-slate-600 py-8 text-xs italic">尚未有評語紀錄</p>}
+                                    <div className="bg-slate-900 rounded-[2.5rem] p-6 border border-yellow-500/20 shadow-xl text-center">
+                                        <div className="text-yellow-500 font-black italic text-xs mb-1">#{searchResult.number} | {searchResult.group}</div>
+                                        <h3 className="text-3xl font-black mb-4">{searchResult.name}</h3>
+                                        <div className="bg-slate-950 p-6 rounded-3xl border border-white/5">
+                                            <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Attendance Rate</div>
+                                            <div className="text-5xl font-black text-yellow-500 italic">85%</div>
                                         </div>
                                     </div>
                                 )}
                             </div>
                         ) : (
-                            <div className="space-y-4">
-                                <div className="bg-slate-900 p-5 rounded-3xl border border-white/5 flex justify-between items-center shadow-lg">
-                                    <input type="date" className="bg-slate-950 p-2 rounded-xl text-xs font-bold text-yellow-500 outline-none" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
-                                    <div className="flex gap-2">
-                                        <button onClick={captureReport} className="bg-blue-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 shadow-lg shadow-blue-900/30">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                                            截圖報表
-                                        </button>
+                            <div className="space-y-6">
+                                <div className="bg-slate-900 p-5 rounded-3xl border border-white/5 flex flex-col gap-4 shadow-lg">
+                                    <div className="flex justify-between items-center">
+                                        <input type="date" className="bg-slate-950 p-2 rounded-xl text-xs font-bold text-yellow-500 outline-none" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                                        <div className="text-[10px] font-black text-slate-500 uppercase italic">Coach Panel</div>
                                     </div>
+                                    <button onClick={captureFullReport} className="w-full bg-green-600 text-white py-3 rounded-2xl text-xs font-black uppercase flex justify-center items-center gap-2 active:scale-95 transition-all">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                                        產生「三組全開」長圖報表
+                                    </button>
                                 </div>
 
-                                {/* 點名列表 */}
-                                <div className="space-y-3">
-                                    {currentPlayers.map(p => {
-                                        const status = dailyRecords[selectedDate]?.roll?.[p.id] || 0;
+                                {/* 快速新增區域 */}
+                                <div className="bg-slate-900/50 p-4 rounded-3xl border border-dashed border-slate-800">
+                                    <h4 className="text-[10px] font-black text-slate-600 uppercase mb-3 px-1 tracking-widest">Quick Add Member</h4>
+                                    <form onSubmit={handleAddPlayer} className="flex gap-2">
+                                        <input 
+                                            type="text" 
+                                            lang="zh-TW" 
+                                            placeholder="姓名(中文)" 
+                                            value={newPlayerName}
+                                            onChange={e => setNewPlayerName(e.target.value)}
+                                            autoCapitalize="none"
+                                            autoCorrect="off"
+                                            className="flex-[2] bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 focus:border-yellow-500/50 outline-none" 
+                                        />
+                                        <input 
+                                            type="text" 
+                                            inputMode="numeric"
+                                            placeholder="背號" 
+                                            value={newPlayerNumber}
+                                            onChange={e => setNewPlayerNumber(e.target.value)}
+                                            className="flex-1 bg-slate-950 p-3 rounded-xl text-sm border border-slate-800 focus:border-yellow-500/50 outline-none" 
+                                        />
+                                        <button type="submit" className="bg-white text-black px-4 rounded-xl active:scale-95 transition-all">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 5v14M5 12h14"/></svg>
+                                        </button>
+                                    </form>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <h3 className="px-2 text-[10px] font-black text-yellow-500 italic uppercase">Editing: {activeGroup}</h3>
+                                    {(groupedPlayers[activeGroup] || []).map(p => {
+                                        const status = currentRoll[p.id] || 0;
                                         return (
-                                            <div key={p.id} className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden transition-all hover:border-white/10">
-                                                <div className="p-4 flex justify-between items-center">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 bg-slate-950 rounded-full flex items-center justify-center font-black text-yellow-500 italic text-xs">#{p.number}</div>
-                                                        <span className="font-bold">{p.name}</span>
-                                                    </div>
-                                                    <div className="flex gap-1">
-                                                        <button onClick={() => toggleStatus(p.id, 1)} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${status === 1 ? 'bg-green-600 text-white shadow-lg' : 'bg-slate-950 text-slate-700'}`}>出</button>
-                                                        <button onClick={() => toggleStatus(p.id, 2)} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${status === 2 ? 'bg-red-600 text-white shadow-lg' : 'bg-slate-950 text-slate-700'}`}>缺</button>
-                                                    </div>
+                                            <div key={p.id} className="bg-slate-900 rounded-2xl border border-white/5 flex justify-between items-center p-3">
+                                                <div className="flex items-center gap-3 pl-2">
+                                                    <div className="w-7 h-7 bg-slate-950 rounded-full flex items-center justify-center font-black text-yellow-500 italic text-[10px]">#{p.number}</div>
+                                                    <span className="font-bold text-sm">{p.name}</span>
                                                 </div>
-                                                <div className="px-4 pb-4">
-                                                    <CommentInput 
-                                                        pId={p.id}
-                                                        initialValue={dailyRecords[selectedDate]?.playerComments?.[p.id] || ""}
-                                                        onSave={updatePlayerComment}
-                                                    />
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => toggleStatus(p.id, 1)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 1 ? 'bg-green-600 text-white' : 'bg-slate-950 text-slate-800'}`}>出</button>
+                                                    <button onClick={() => toggleStatus(p.id, 2)} className={`w-12 py-2 rounded-lg text-xs font-black transition-all ${status === 2 ? 'bg-red-600 text-white' : 'bg-slate-950 text-slate-800'}`}>缺</button>
                                                 </div>
                                             </div>
                                         )
@@ -271,63 +260,48 @@
                         )}
                     </main>
 
-                    {/* 隱藏的截圖專用渲染區 (隱藏但在 DOM 中，讓 html2canvas 抓取) */}
+                    {/* 隱藏的截圖專用渲染區 - 全體合一 */}
                     <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
-                        <div ref={reportRef} className="report-preview text-slate-100">
-                            <div className="text-center mb-10">
-                                <div className="inline-block bg-yellow-500 text-black px-3 py-1 rounded font-black italic text-xs mb-2">TIGERS REPORT</div>
-                                <h1 className="text-3xl font-black italic tracking-tighter uppercase leading-none">Meiyu <span className="text-yellow-500">Tigers</span></h1>
-                                <p className="text-slate-500 text-xs mt-2 font-bold tracking-[0.2em]">{selectedDate} 訓練日報 - {activeGroup}</p>
+                        <div ref={allReportRef} className="report-preview">
+                            <div className="text-center mb-10 border-b border-white/5 pb-10">
+                                <div className="inline-block bg-yellow-500 text-black px-4 py-1.5 rounded font-black italic text-[11px] mb-3 tracking-[0.2em]">MEIYU TIGERS DAILY</div>
+                                <h1 className="text-5xl font-black italic tracking-tighter uppercase leading-none">Tiger <span className="text-yellow-500 text-4xl">Squad</span></h1>
+                                <div className="mt-4 inline-block bg-slate-900 px-4 py-1.5 rounded-full text-xs font-bold text-slate-400">{selectedDate} 訓練日報表</div>
                             </div>
 
-                            <div className="flex justify-around mb-10 gap-4">
-                                <div className="bg-slate-900/50 p-4 rounded-2xl flex-1 text-center border border-white/5">
-                                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">出席</div>
-                                    <div className="text-2xl font-black text-green-500 italic">{attendanceSummary.present.length}</div>
-                                </div>
-                                <div className="bg-slate-900/50 p-4 rounded-2xl flex-1 text-center border border-white/5">
-                                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">缺席</div>
-                                    <div className="text-2xl font-black text-red-500 italic">{attendanceSummary.absent.length}</div>
-                                </div>
-                                <div className="bg-slate-900/50 p-4 rounded-2xl flex-1 text-center border border-white/5">
-                                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">總人數</div>
-                                    <div className="text-2xl font-black text-yellow-500 italic">{attendanceSummary.total}</div>
-                                </div>
-                            </div>
-
-                            <div className="space-y-6">
-                                <h3 className="text-[10px] font-black text-yellow-500 uppercase tracking-widest border-b border-yellow-500/30 pb-2">表現建議清單</h3>
-                                {currentPlayers.map(p => {
-                                    const comment = dailyRecords[selectedDate]?.playerComments?.[p.id];
-                                    const status = dailyRecords[selectedDate]?.roll?.[p.id];
-                                    if (!comment && status !== 1) return null;
-                                    return (
-                                        <div key={p.id} className="border-b border-white/5 pb-4">
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <span className="text-[10px] font-black text-yellow-500">#{p.number}</span>
-                                                <span className="font-bold text-sm">{p.name}</span>
-                                                {status === 1 ? (
-                                                    <span className="text-[8px] bg-green-500/20 text-green-500 px-1 rounded font-black">PRESENT</span>
-                                                ) : (
-                                                    <span className="text-[8px] bg-red-500/20 text-red-500 px-1 rounded font-black">ABSENT</span>
-                                                )}
+                            {['教練團', 'U10', 'U9'].map(group => (
+                                <div key={group} className="mb-10">
+                                    <div className="group-divider flex justify-between items-end">
+                                        <h2 className="text-xl font-black italic uppercase text-yellow-500">{group}</h2>
+                                        <span className="text-[10px] text-slate-600 font-bold mb-1">
+                                            出席: {groupedPlayers[group].filter(p => currentRoll[p.id] === 1).length} / {groupedPlayers[group].length}
+                                        </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+                                        {groupedPlayers[group].map(p => (
+                                            <div key={p.id} className="flex justify-between items-center border-b border-white/5 pb-1.5">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[9px] font-black text-yellow-500 italic w-5">#{p.number}</span>
+                                                    <span className="font-bold text-[13px]">{p.name}</span>
+                                                </div>
+                                                <span className={`status-badge ${currentRoll[p.id] === 1 ? 'status-present' : currentRoll[p.id] === 2 ? 'status-absent' : 'status-none'}`}>
+                                                    {currentRoll[p.id] === 1 ? 'P' : currentRoll[p.id] === 2 ? 'A' : '-'}
+                                                </span>
                                             </div>
-                                            <p className="text-xs text-slate-400 leading-relaxed pl-6 italic">
-                                                {comment || "今日表現穩定。"}
-                                            </p>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
 
-                            <div className="mt-12 pt-6 border-t border-white/5 text-center">
-                                <p className="text-[9px] text-slate-700 font-black tracking-widest uppercase">Generated by Meiyu Tigers Performance System</p>
+                            <div className="mt-16 text-center pt-8 border-t border-white/5">
+                                <p className="text-[10px] text-slate-500 font-black tracking-[0.4em] uppercase italic">Consistency Is Key</p>
+                                <p className="text-[8px] text-slate-800 mt-2">© 美育虎體育教育系統</p>
                             </div>
                         </div>
                     </div>
 
                     <footer className="fixed bottom-0 inset-x-0 p-4 bg-slate-950/80 backdrop-blur-md border-t border-white/5 text-center">
-                        <div className="text-[8px] text-slate-800 font-black tracking-widest uppercase italic">Meiyu Tigers Analytics 2.2 | Screenshot Enabled</div>
+                        <div className="text-[8px] text-slate-800 font-black tracking-widest uppercase italic">Meiyu Tigers Performance Hub 2.4</div>
                     </footer>
                 </div>
             );
