@@ -14,10 +14,14 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
-  Users, UserCheck, Activity, Download, Plus, Trash2, ShieldCheck, AlertCircle, Loader2, ChevronRight
+  Users, UserCheck, Activity, Download, Plus, Trash2, ShieldCheck, AlertCircle, Loader2
 } from 'lucide-react';
 
-// --- 核心配置 (由環境變數注入) ---
+/**
+ * --- 系統核心配置 ---
+ * 這裡自動抓取你的 Firebase 設定與 AppID。
+ * appId 決定了資料會存放在雲端的哪個資料夾，確保 U12 與 U10 不會混在一起。
+ */
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -25,22 +29,22 @@ const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-u12-pro';
 
 export default function App() {
-  // 系統狀態
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('attendance');
-  const [isCapturing, setIsCapturing] = useState(false);
-  const captureRef = useRef(null);
+  // --- 狀態管理 ---
+  const [user, setUser] = useState(null);       // 登入用戶狀態
+  const [loading, setLoading] = useState(true); // 載入中狀態
+  const [error, setError] = useState(null);     // 錯誤訊息
+  const [activeTab, setActiveTab] = useState('attendance'); // 當前分頁
+  const [isCapturing, setIsCapturing] = useState(false);    // 是否正在截圖
+  const captureRef = useRef(null);              // 截圖目標區域
 
-  // 業務資料狀態
+  // 本地資料存儲：成員、教練、最後更新時間
   const [data, setData] = useState({
     members: [],
     coaches: [],
     lastUpdated: null
   });
 
-  // 1. 身份驗證與初始化 (規則 3)
+  // --- 1. 身份驗證 (確保安全進入雲端) ---
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -50,8 +54,7 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Auth Error:", err);
-        setError("身份驗證失敗，請確認 Firebase 設定。");
+        setError("連線失敗：請檢查 Firebase 授權網域。");
       }
     };
 
@@ -64,19 +67,20 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. 實時數據監聽 (規則 1: 嚴謹路徑)
+  // --- 2. 雲端數據同步 (Snapshot 實時監聽) ---
   useEffect(() => {
     if (!user) return;
 
-    // 格式: /artifacts/{appId}/public/data/main/current
+    // 定義存儲路徑：/artifacts/{appId}/public/data/main/current
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
     
+    // 開啟實時監聽：當雲端有人修改，你的手機會立刻更新
     const unsubscribe = onSnapshot(docRef, 
       (docSnap) => {
         if (docSnap.exists()) {
           setData(docSnap.data());
         } else {
-          // 初始化雲端文檔
+          // 如果雲端沒資料，就初始化一個空的
           const initialData = { members: [], coaches: [], lastUpdated: new Date().toISOString() };
           setDoc(docRef, initialData);
           setData(initialData);
@@ -84,26 +88,27 @@ export default function App() {
         setError(null);
       },
       (err) => {
-        console.error("Firestore Error:", err);
-        setError(`權限不足或路徑錯誤 (Code: ${err.code})`);
+        setError(`權限拒絕：請確認 Firestore Rules 已發布。`);
       }
     );
 
     return () => unsubscribe();
   }, [user]);
 
-  // 3. 數據同步函式
+  // --- 3. 數據寫入 (將本地更改推送到雲端) ---
   const persistData = async (newData) => {
     if (!user) return;
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
     try {
       await setDoc(docRef, { ...newData, lastUpdated: new Date().toISOString() });
     } catch (err) {
-      setError("儲存失敗，請檢查網路連線。");
+      setError("儲存失敗，請檢查網路。");
     }
   };
 
-  // 4. 業務邏輯處理
+  // --- 4. 功能操作 (點名、增刪、筆記) ---
+
+  // 切換出席狀態：在席 -> 遲到 -> 缺席 循環
   const toggleAttendance = (id) => {
     const newMembers = data.members.map(m => {
       if (m.id === id) {
@@ -114,12 +119,13 @@ export default function App() {
       return m;
     });
     const newData = { ...data, members: newMembers };
-    setData(newData); // 即時更新 UI
-    persistData(newData); // 非同步同步雲端
+    setData(newData); // 為了順暢，先改 UI
+    persistData(newData); // 後同步雲端
   };
 
+  // 新增成員或教練
   const addPerson = (type) => {
-    const name = prompt(`請輸入${type === 'coaches' ? '教練' : '隊員'}姓名:`);
+    const name = prompt(`請輸入姓名:`);
     if (!name) return;
     const newItem = {
       id: `${type}-${Date.now()}`,
@@ -132,22 +138,24 @@ export default function App() {
     persistData(newData);
   };
 
+  // 刪除人員
   const deletePerson = (type, id) => {
-    if (!window.confirm("確定移除此成員？")) return;
+    if (!window.confirm("確定移除此人？雲端資料將同步刪除。")) return;
     const newData = { ...data, [type]: data[type].filter(p => p.id !== id) };
     persistData(newData);
   };
 
+  // 更新訓練表現筆記
   const updateNote = (id, note) => {
     const newMembers = data.members.map(m => m.id === id ? { ...m, note } : m);
     persistData({ ...data, members: newMembers });
   };
 
-  // 5. 截圖報表生成
+  // --- 5. 導出報表 (截圖功能) ---
   const handleExport = async () => {
     if (!captureRef.current) return;
     setIsCapturing(true);
-    // 引入 html2canvas 腳本
+    // 自動載入截圖套件
     if (!window.html2canvas) {
       const script = document.createElement('script');
       script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
@@ -165,16 +173,17 @@ export default function App() {
     }, 100);
   };
 
+  // 載入畫面
   if (loading) return (
     <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white">
       <Loader2 className="animate-spin text-yellow-500 mb-4" size={40} />
-      <p className="font-bold tracking-widest text-sm italic">TIGERS CLOUD CONNECTING...</p>
+      <p className="font-bold tracking-widest text-sm italic italic">正在同步美育虎雲端...</p>
     </div>
   );
 
   return (
-    <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 pb-20">
-      {/* Header */}
+    <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col pb-20 shadow-2xl">
+      {/* 頂部藍區 */}
       <header className="bg-slate-900 text-white p-6 rounded-b-[2.5rem] shadow-xl">
         <div className="flex justify-between items-start">
           <div>
@@ -196,17 +205,17 @@ export default function App() {
         )}
       </header>
 
-      {/* Tabs */}
+      {/* 分頁按鈕區 */}
       <nav className="flex px-6 -mt-6 gap-2">
         {[
-          { id: 'attendance', label: '點名', icon: UserCheck },
-          { id: 'training', label: '表現', icon: Activity },
-          { id: 'manage', label: '名單', icon: Users }
+          { id: 'attendance', label: '點名回報', icon: UserCheck },
+          { id: 'training', label: '訓練筆記', icon: Activity },
+          { id: 'manage', label: '成員編輯', icon: Users }
         ].map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-bold text-sm transition-all shadow-lg ${
+            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-bold text-xs transition-all shadow-lg ${
               activeTab === tab.id ? 'bg-yellow-500 text-slate-900 scale-105' : 'bg-white text-slate-400'
             }`}
           >
@@ -216,16 +225,13 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Main Content */}
+      {/* 主要內容區 */}
       <main ref={captureRef} className="flex-1 p-6 space-y-8">
+        
+        {/* 分頁：點名 */}
         {activeTab === 'attendance' && (
           <section className="animate-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-black text-slate-800 flex items-center gap-2">
-                今日出席 <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full">{data.members.filter(m => m.status === 'present').length}/{data.members.length}</span>
-              </h2>
-            </div>
-            
+            <h2 className="font-black text-slate-800 mb-4">今日出席情況</h2>
             <div className="grid grid-cols-3 gap-3">
               {data.members.map(member => (
                 <button
@@ -238,7 +244,7 @@ export default function App() {
                   }`}
                 >
                   <span className="font-black text-xs truncate w-full">{member.name}</span>
-                  <span className="text-[8px] font-bold uppercase tracking-tighter">
+                  <span className="text-[8px] font-bold uppercase">
                     {member.status === 'present' ? '在席' : member.status === 'late' ? '遲到' : '缺席'}
                   </span>
                 </button>
@@ -252,9 +258,10 @@ export default function App() {
           </section>
         )}
 
+        {/* 分頁：表現筆記 */}
         {activeTab === 'training' && (
           <section className="space-y-4 animate-in fade-in duration-500">
-            <h2 className="font-black text-slate-800">教練技術筆記</h2>
+            <h2 className="font-black text-slate-800">教練技術評核</h2>
             {data.members.map(member => (
               <div key={member.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
                 <div className="flex justify-between items-center mb-2">
@@ -264,20 +271,23 @@ export default function App() {
                 <textarea
                   value={member.note || ''}
                   onChange={(e) => updateNote(member.id, e.target.value)}
-                  placeholder="紀錄球員今日表現..."
-                  className="w-full text-xs bg-slate-50 rounded-xl p-3 border-none focus:ring-1 focus:ring-yellow-500 h-20 resize-none"
+                  placeholder="輸入今日訓練觀察..."
+                  className="w-full text-xs bg-slate-50 rounded-xl p-3 border-none focus:ring-1 focus:ring-yellow-500 h-24 resize-none"
                 />
               </div>
             ))}
           </section>
         )}
 
+        {/* 分頁：管理名單 */}
         {activeTab === 'manage' && (
           <section className="space-y-6 animate-in fade-in duration-500">
             {['coaches', 'members'].map(type => (
               <div key={type} className="bg-white rounded-3xl overflow-hidden border border-slate-100 shadow-sm">
-                <div className="p-4 bg-slate-50 border-b flex justify-between items-center">
-                  <span className="font-black text-[10px] uppercase tracking-widest text-slate-400">{type === 'coaches' ? 'Coach Staff' : 'Squad Roster'}</span>
+                <div className="p-4 bg-slate-100 border-b flex justify-between items-center">
+                  <span className="font-black text-[10px] uppercase tracking-widest text-slate-400">
+                    {type === 'coaches' ? '教練團隊' : '隊員名單'}
+                  </span>
                   <button onClick={() => addPerson(type)} className="text-blue-500"><Plus size={18}/></button>
                 </div>
                 <div className="divide-y divide-slate-50">
@@ -296,7 +306,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Action Button */}
+      {/* 導出報表按鈕 */}
       {activeTab === 'attendance' && !isCapturing && (
         <button
           onClick={handleExport}
@@ -306,9 +316,9 @@ export default function App() {
         </button>
       )}
 
-      {/* Footer Branding */}
+      {/* 頁尾 */}
       <footer className="p-8 text-center">
-        <p className="text-[10px] font-black text-slate-300 tracking-[0.2em] uppercase">Powered by Football Pro System</p>
+        <p className="text-[8px] font-black text-slate-300 tracking-[0.2em] uppercase">Powered by Football Pro Cloud System</p>
       </footer>
     </div>
   );
