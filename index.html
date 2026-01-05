@@ -3,69 +3,69 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美育虎U10 - 終極診斷</title>
+    <title>美育虎U10 - 雲端管理系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background-color: #0f172a; color: white; font-family: sans-serif; }
-        .debug-log { background: #000; color: #0f0; font-family: monospace; font-size: 10px; padding: 10px; height: 150px; overflow-y: auto; border-top: 2px solid #333; position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000; }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #0f172a; color: #f1f5f9; margin: 0; }
+        .camo-card { background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
+        .btn-status { transition: all 0.2s; }
+        .btn-active-1 { background-color: #22c55e !important; color: white; }
+        .btn-active-2 { background-color: #ef4444 !important; color: white; }
     </style>
 </head>
-<body class="pb-40">
+<body class="p-4 pb-20">
 
-    <!-- 轉圈圈遮罩 -->
-    <div id="loader" class="fixed inset-0 bg-slate-900 z-[999] flex flex-col items-center justify-center p-10 text-center">
-        <div class="w-12 h-12 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h2 class="text-xl font-bold text-yellow-500">系統診斷中...</h2>
-        <p class="text-slate-500 text-xs mt-2">如果超過 10 秒沒反應，請看下方綠色文字報錯</p>
-        <button onclick="forceShow()" class="mt-8 px-6 py-2 bg-slate-800 rounded-full text-xs">強制進入介面 (僅限測試)</button>
+    <div id="loading" class="fixed inset-0 bg-slate-950 z-[100] flex flex-col items-center justify-center">
+        <div class="w-10 h-10 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
+        <p class="mt-4 text-yellow-500 font-bold">同步雲端資料中...</p>
     </div>
 
-    <!-- 主介面 -->
-    <div id="app" class="hidden p-4">
+    <div class="max-w-md mx-auto">
         <header class="flex justify-between items-center mb-6">
-            <h1 onclick="requestAdmin()" class="text-2xl font-black italic text-yellow-500">TIGERS U10</h1>
-            <div id="cloud-indicator" class="text-[10px] bg-red-900 px-2 py-1 rounded">OFFLINE</div>
+            <h1 onclick="askAdmin()" class="text-2xl font-black italic text-white">TIGERS <span class="text-yellow-500">U10</span></h1>
+            <div id="connection-status" class="text-[10px] bg-green-600 px-2 py-1 rounded">ONLINE</div>
         </header>
 
-        <div id="parent-zone" class="space-y-4">
-            <div class="bg-slate-800 p-6 rounded-3xl text-center">
-                <input type="text" id="search-input" placeholder="輸入球員姓名" class="w-full bg-slate-950 p-4 rounded-xl text-center text-xl mb-4 outline-none border border-slate-700">
-                <button onclick="handleSearch()" class="w-full bg-yellow-500 text-black py-4 rounded-xl font-bold">查詢紀錄</button>
-                <div id="result-area" class="mt-6 text-left"></div>
+        <!-- 家長查詢區 -->
+        <div id="parent-ui" class="space-y-4">
+            <div class="camo-card p-6 rounded-3xl text-center">
+                <h2 class="text-lg font-bold text-yellow-500 mb-4">學員出席與訓練查詢</h2>
+                <input type="text" id="search-name" placeholder="輸入學員姓名" class="w-full bg-slate-900 p-4 rounded-2xl border border-slate-700 text-center mb-4 outline-none focus:border-yellow-500">
+                <button onclick="doSearch()" class="w-full bg-yellow-500 text-slate-950 py-4 rounded-2xl font-black shadow-lg active:scale-95 transition-transform">立即查詢</button>
+                <div id="search-result" class="mt-6 text-left"></div>
             </div>
         </div>
 
-        <div id="coach-zone" class="hidden space-y-4">
-            <div class="bg-slate-800 p-4 rounded-xl">
-                <div class="flex justify-between mb-4">
-                    <input type="date" id="target-date" class="bg-slate-950 p-2 rounded text-sm">
-                    <button onclick="saveData()" class="bg-blue-600 px-4 py-2 rounded text-sm font-bold">同步存檔</button>
+        <!-- 教練管理區 (預設隱藏) -->
+        <div id="coach-ui" class="hidden space-y-4">
+            <div class="camo-card p-4 rounded-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <input type="date" id="work-date" onchange="loadDaily()" class="bg-slate-900 text-yellow-500 p-2 rounded-lg font-bold text-sm">
+                    <button onclick="saveDaily()" id="save-btn" class="bg-blue-600 px-6 py-2 rounded-xl text-sm font-bold">同步存檔</button>
                 </div>
-                <div id="member-list" class="space-y-2"></div>
+                <textarea id="daily-note" placeholder="今日訓練重點..." class="w-full bg-slate-900 p-4 h-24 rounded-xl text-sm border border-slate-700 outline-none"></textarea>
+            </div>
+
+            <div id="roll-call-list" class="space-y-2">
+                <!-- 名單會由 JS 產生 -->
+            </div>
+
+            <div class="camo-card p-4 rounded-2xl mt-8">
+                <h3 class="text-xs font-bold text-slate-500 mb-4 uppercase">成員管理</h3>
+                <div class="flex gap-2 mb-4">
+                    <input type="text" id="new-name" placeholder="新球員姓名" class="flex-1 bg-slate-900 p-3 rounded-xl text-sm outline-none border border-slate-700">
+                    <button onclick="addPlayer()" class="bg-slate-700 px-4 rounded-xl text-sm font-bold">新增</button>
+                </div>
+                <div id="member-settings" class="grid grid-cols-2 gap-2 text-[10px]"></div>
             </div>
         </div>
-    </div>
-
-    <!-- 螢幕 log 視窗 -->
-    <div id="debug" class="debug-log">
-        <div>[SYSTEM] 初始化診斷開始...</div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-
-        const log = (msg, color = "#0f0") => {
-            const div = document.createElement('div');
-            div.style.color = color;
-            div.innerText = `> ${msg}`;
-            const container = document.getElementById('debug');
-            container.appendChild(div);
-            container.scrollTop = container.scrollHeight;
-        };
-
-        window.onerror = (e) => log("JS Error: " + e, "#f00");
 
         const firebaseConfig = {
             apiKey: "AIzaSyAgz1BJI-PJLv3VIUfMQSmr6F-WkXzEMzU",
@@ -76,71 +76,128 @@
             appId: "1:157433419856:web:07db1e6968990d5719d955"
         };
 
-        let db, auth, players = [], currentRoll = {};
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
 
-        async function init() {
-            try {
-                log("正在連線 Firebase...");
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                log("Firebase 模組載入成功");
+        let players = [];
+        let currentDayData = { roll: {}, note: "" };
 
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        log("身份驗證成功: " + user.uid);
-                        document.getElementById('cloud-indicator').innerText = "ONLINE";
-                        document.getElementById('cloud-indicator').className = "text-[10px] bg-green-600 px-2 py-1 rounded";
-                        setupApp();
-                    } else {
-                        log("嘗試匿名登入...");
-                        signInAnonymously(auth).catch(e => {
-                            log("登入失敗: " + e.code, "#f00");
-                            log("請確認 Firebase 匿名登入已開啟", "#f00");
-                        });
-                    }
-                });
-
-            } catch (e) {
-                log("初始化崩潰: " + e.message, "#f00");
+        // 1. 認證監聽
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                initData();
+            } else {
+                signInAnonymously(auth);
             }
-        }
+        });
 
-        function setupApp() {
-            log("開始讀取球員名單...");
-            // 使用最簡單的集合路徑進行測試
+        // 2. 資料初始化
+        function initData() {
+            // 監聽球員名單
             onSnapshot(collection(db, "members"), (snap) => {
-                players = snap.docs.map(d => ({id: d.id, ...d.data()}));
-                log(`成功獲取 ${players.length} 名球員`);
-                document.getElementById('loader').style.display = 'none';
-                document.getElementById('app').classList.remove('hidden');
-            }, (err) => {
-                log("讀取資料庫失敗: " + err.message, "#f00");
-                log("請確認 Firestore Rules 已發布且允許讀取", "#f00");
+                players = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => a.name.localeCompare(b.name, 'zh-TW'));
+                renderUI();
+                document.getElementById('loading').style.display = 'none';
             });
+
+            // 設定初始日期
+            document.getElementById('work-date').value = new Date().toLocaleDateString('en-CA');
+            loadDaily();
         }
 
-        window.forceShow = () => {
-            log("強制跳過連線，顯示介面...");
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('app').classList.remove('hidden');
+        // 3. 讀取每日紀錄
+        window.loadDaily = () => {
+            const date = document.getElementById('work-date').value;
+            onSnapshot(doc(db, "daily", date), (snap) => {
+                currentDayData = snap.exists() ? snap.data() : { roll: {}, note: "" };
+                document.getElementById('daily-note').value = currentDayData.note || "";
+                renderUI();
+            });
         };
 
-        window.requestAdmin = () => {
-            const p = prompt("密碼");
-            if(p === "0227") {
-                document.getElementById('coach-zone').classList.remove('hidden');
-                log("已進入教練模式");
+        // 4. 渲染介面
+        function renderUI() {
+            // 點名清單
+            const list = document.getElementById('roll-call-list');
+            list.innerHTML = players.map(p => {
+                const status = currentDayData.roll[p.id] || 0;
+                return `
+                    <div class="camo-card p-4 rounded-2xl flex justify-between items-center">
+                        <span class="font-bold">${p.name}</span>
+                        <div class="flex gap-2">
+                            <button onclick="setRoll('${p.id}', 1)" class="w-12 py-2 rounded-xl text-xs font-bold ${status===1?'btn-active-1':'bg-slate-800 text-slate-500'}">出</button>
+                            <button onclick="setRoll('${p.id}', 2)" class="w-12 py-2 rounded-xl text-xs font-bold ${status===2?'btn-active-2':'bg-slate-800 text-slate-500'}">缺</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // 成員管理
+            document.getElementById('member-settings').innerHTML = players.map(p => `
+                <div class="bg-slate-800/50 p-2 rounded-lg flex justify-between">
+                    <span>${p.name}</span>
+                    <button onclick="deleteMember('${p.id}')" class="text-red-500">✕</button>
+                </div>
+            `).join('');
+        }
+
+        // 5. 互動功能
+        window.setRoll = (id, status) => {
+            currentDayData.roll[id] = (currentDayData.roll[id] === status) ? 0 : status;
+            renderUI();
+        };
+
+        window.saveDaily = async () => {
+            const date = document.getElementById('work-date').value;
+            const btn = document.getElementById('save-btn');
+            currentDayData.note = document.getElementById('daily-note').value;
+            btn.disabled = true; btn.innerText = "儲存中...";
+            await setDoc(doc(db, "daily", date), currentDayData);
+            btn.innerText = "✅ 已儲存";
+            setTimeout(() => { btn.disabled = false; btn.innerText = "同步存檔"; }, 2000);
+        };
+
+        window.addPlayer = async () => {
+            const name = document.getElementById('new-name').value.trim();
+            if(!name) return;
+            await addDoc(collection(db, "members"), { name, created: Date.now() });
+            document.getElementById('new-name').value = "";
+        };
+
+        window.deleteMember = async (id) => {
+            if(confirm("確定刪除此成員？")) await deleteDoc(doc(db, "members", id));
+        };
+
+        window.askAdmin = () => {
+            if(prompt("請輸入教練密碼") === "0227") {
+                document.getElementById('coach-ui').classList.remove('hidden');
+                document.getElementById('parent-ui').classList.add('hidden');
             }
         };
 
-        window.handleSearch = () => {
-            const name = document.getElementById('search-input').value;
-            log("查詢姓名: " + name);
-            // 邏輯省略...
+        window.doSearch = () => {
+            const name = document.getElementById('search-name').value.trim();
+            const p = players.find(x => x.name === name);
+            const res = document.getElementById('search-result');
+            if(!p) { res.innerHTML = `<p class="text-center text-red-400 font-bold">查無球員名單</p>`; return; }
+            
+            const status = currentDayData.roll[p.id] || 0;
+            res.innerHTML = `
+                <div class="camo-card p-6 rounded-3xl border-l-4 ${status===1?'border-green-500':'border-red-500'}">
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-2xl font-bold">${p.name}</span>
+                        <span class="font-black ${status===1?'text-green-400':status===2?'text-red-400':'text-slate-500'}">
+                            ${status===1?'✅ 今日已出席':status===2?'❌ 今日缺席':'❔ 尚未點名'}
+                        </span>
+                    </div>
+                    <div class="bg-black/30 p-4 rounded-xl">
+                        <p class="text-[10px] text-yellow-500 font-bold mb-1">今日教練筆記</p>
+                        <p class="text-sm">${currentDayData.note || "今日無特別紀錄。"}</p>
+                    </div>
+                </div>
+            `;
         };
-
-        init();
     </script>
 </body>
 </html>
