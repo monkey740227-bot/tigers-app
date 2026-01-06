@@ -7,26 +7,43 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, addDoc, query } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
-        // --- Firebase 配置 ---
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"apiKey":"demo-key"}'); 
+        // --- 你的實戰 Firebase 配置 ---
+        const defaultFirebaseConfig = {
+            apiKey: "AIzaSyAgz1BJI-PJLv3VIUfMQSmr6F-WkXzEMzU",
+            authDomain: "mei-yu-u10.firebaseapp.com",
+            projectId: "mei-yu-u10",
+            storageBucket: "mei-yu-u10.firebasestorage.app",
+            messagingSenderId: "157433419856",
+            appId: "1:157433419856:web:07db1e6968990d5719d955",
+            measurementId: "G-JP9E1JT548"
+        };
+
+        let firebaseConfig;
+        try {
+            firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : defaultFirebaseConfig;
+        } catch (e) {
+            firebaseConfig = defaultFirebaseConfig;
+        }
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-elite-pro';
         
         let app, auth, db, user;
         let members = [];
         let attendanceData = {}; 
-        let viewMode = 'coach'; // coach, parent, manage
+        let viewMode = 'coach';
         let currentDate = new Date().toISOString().split('T')[0];
 
         async function initSystem() {
+            const root = document.getElementById('app');
             try {
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 認證邏輯
+                // 認證流程
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -40,33 +57,29 @@
                     }
                 });
             } catch (e) {
-                console.error("初始化失敗:", e);
-                document.getElementById('app').innerHTML = `<div class="p-10 text-rose-500">系統初始化失敗，請檢查網路連線。</div>`;
+                console.error("系統啟動失敗:", e);
+                root.innerHTML = `<div class="p-10 text-rose-500 text-center">連線失敗，請確認 Firebase 設定。</div>`;
             }
         }
 
         async function loadData() {
             if (!user) return;
             const memCol = collection(db, 'artifacts', appId, 'public', 'data', 'members');
-            
-            // 監聽成員名單
-            onSnapshot(memCol, async (snap) => {
+            onSnapshot(memCol, (snap) => {
                 members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                await loadAttendance(currentDate);
-            }, (err) => console.error("成員讀取失敗:", err));
+                loadAttendance(currentDate);
+            });
         }
 
         async function loadAttendance(date) {
-            if (!user) return;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
             const snap = await getDoc(docRef);
             attendanceData = snap.exists() ? snap.data() : {};
             renderApp();
         }
 
-        // --- 全域操作函數 ---
+        // 互動函數
         window.updateStatus = async (id, status) => {
-            if (!user) return;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
             attendanceData[id] = { ...(attendanceData[id] || {}), status };
             await setDoc(docRef, attendanceData, { merge: true });
@@ -74,7 +87,6 @@
         };
 
         window.updateFeedback = async (id, text) => {
-            if (!user) return;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
             attendanceData[id] = { ...(attendanceData[id] || {}), feedback: text };
             await setDoc(docRef, attendanceData, { merge: true });
@@ -84,58 +96,37 @@
             const name = document.getElementById('newMemName').value.trim();
             const role = document.getElementById('newMemRole').value;
             if (!name) return;
-            
-            const memCol = collection(db, 'artifacts', appId, 'public', 'data', 'members');
-            await addDoc(memCol, { name, role, createdAt: Date.now() });
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), { name, role, createdAt: Date.now() });
             document.getElementById('newMemName').value = '';
         };
 
         window.deleteMember = async (id) => {
-            if (!confirm('確定要刪除此球員嗎？')) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', id);
-            await deleteDoc(docRef);
+            if (confirm('確定要移除此成員？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', id));
         };
 
-        window.changeDate = (date) => {
-            currentDate = date;
-            loadAttendance(date);
-        };
-
+        window.changeDate = (date) => { currentDate = date; loadAttendance(date); };
         window.switchView = (mode) => { viewMode = mode; renderApp(); };
 
         window.searchChild = async () => {
             const name = document.getElementById('parentSearchInput').value.trim();
             const result = members.find(m => m.name === name);
             const container = document.getElementById('searchResult');
+            if (!result) { container.innerHTML = `<p class="text-rose-500">查無此球員</p>`; return; }
             
-            if (!result) { 
-                container.innerHTML = `<p class="text-rose-400 text-center animate-pulse">找不到該球員，請確認姓名是否正確</p>`; 
-                return; 
-            }
-            
-            const attRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
-            const attSnap = await getDoc(attRef);
+            const attSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate));
             const record = attSnap.exists() ? (attSnap.data()[result.id] || {}) : {};
-
             container.innerHTML = `
-                <div class="bg-slate-900 border-2 border-amber-500 p-6 rounded-2xl animate-in shadow-[0_0_20px_rgba(245,158,11,0.2)]">
-                    <p class="text-amber-500 font-black text-2xl mb-4">${result.name}</p>
+                <div class="bg-slate-900 border border-amber-500/50 p-6 rounded-2xl text-left animate-in">
+                    <p class="text-amber-500 font-bold text-xl">${result.name}</p>
+                    <p class="text-slate-500 text-xs mb-4">訓練日期：${currentDate}</p>
                     <div class="space-y-4">
-                        <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-                            <span class="text-slate-500 text-sm">日期</span>
-                            <span class="text-slate-200 font-medium">${currentDate}</span>
+                        <div class="flex justify-between border-b border-slate-800 pb-2">
+                            <span class="text-slate-400 text-sm">出席狀況</span>
+                            <span class="font-black ${record.status==='present'?'text-green-400':'text-rose-400'}">${record.status==='present'?'出席':'未到'}</span>
                         </div>
-                        <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-                            <span class="text-slate-500 text-sm">出席狀態</span>
-                            <span class="px-3 py-1 rounded-full text-xs font-bold ${record.status==='present'?'bg-green-500/20 text-green-400':'bg-rose-500/20 text-rose-400'}">
-                                ${record.status==='present'?'出席':'未到/未記錄'}
-                            </span>
-                        </div>
-                        <div class="pt-2">
-                            <p class="text-slate-500 text-xs mb-2">教練今日評語</p>
-                            <p class="text-slate-200 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800 italic">
-                                "${record.feedback || '表現優異，繼續保持專注度！'}"
-                            </p>
+                        <div>
+                            <p class="text-slate-400 text-xs mb-1">教練今日點評</p>
+                            <p class="text-slate-200 italic bg-black p-4 rounded-xl border border-slate-800">"${record.feedback || '表現正常，繼續努力！'}"</p>
                         </div>
                     </div>
                 </div>
@@ -150,43 +141,35 @@
         }
 
         function renderCoachHTML() {
-            const roles = [...new Set(members.map(m => m.role))].sort();
+            const groups = [...new Set(members.map(m => m.role))].sort();
             return `
-                <div class="max-w-4xl mx-auto p-4 md:p-8 animate-in">
-                    <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-                        <div onclick="switchView('coach')" class="cursor-pointer">
-                            <h1 class="text-3xl font-black text-amber-500 tracking-tighter">TIGERS ELITE <span class="text-white">PRO</span></h1>
-                            <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Attendance Management System</p>
+                <div class="max-w-4xl mx-auto p-6 animate-in">
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
+                        <div onclick="location.reload()" class="cursor-pointer">
+                            <h1 class="text-3xl font-black text-amber-500">TIGERS <span class="text-white">ELITE</span></h1>
+                            <p class="text-[10px] text-slate-500 font-bold tracking-[0.3em] uppercase">Pro Management System</p>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-sm border border-slate-700 outline-none focus:border-amber-500">
-                            <button onclick="switchView('manage')" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-sm font-bold transition-colors">球員管理</button>
-                            <button onclick="switchView('parent')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-2 rounded-xl text-sm font-bold transition-colors">查詢模式</button>
+                        <div class="flex gap-2">
+                            <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-xs border border-slate-700">
+                            <button onclick="switchView('manage')" class="bg-slate-800 text-xs px-4 py-2 rounded-xl font-bold hover:bg-slate-700 transition-colors">球員管理</button>
+                            <button onclick="switchView('parent')" class="bg-amber-500 text-black text-xs px-4 py-2 rounded-xl font-bold hover:bg-amber-400 transition-colors">查詢模式</button>
                         </div>
                     </div>
-                    
-                    <div class="space-y-10">
-                        ${roles.length === 0 ? '<p class="text-slate-500 text-center py-20">目前名單內無球員，請先至「球員管理」新增。</p>' : roles.map(role => `
+                    <div class="space-y-8">
+                        ${groups.length === 0 ? '<p class="text-slate-600 text-center py-20 italic">目前名單空空如也...</p>' : groups.map(group => `
                             <div>
-                                <div class="flex items-center gap-4 mb-4">
-                                    <div class="h-px flex-1 bg-slate-800"></div>
-                                    <p class="text-[12px] font-black text-amber-500/50 tracking-[0.3em] uppercase">${role}</p>
-                                    <div class="h-px flex-1 bg-slate-800"></div>
-                                </div>
+                                <p class="text-[10px] text-slate-500 font-black mb-4 tracking-widest uppercase border-l-2 border-amber-500 pl-2">隊伍組別: ${group}</p>
                                 <div class="grid gap-3">
-                                    ${members.filter(m => m.role === role).map(m => {
+                                    ${members.filter(m => m.role === group).map(m => {
                                         const rec = attendanceData[m.id] || {};
                                         return `
-                                            <div class="bg-slate-900/50 backdrop-blur-sm p-4 rounded-2xl flex flex-col md:flex-row items-center gap-4 border border-slate-800 hover:border-slate-700 transition-all">
-                                                <div class="flex items-center gap-3 w-full md:w-32">
-                                                    <div class="w-2 h-2 rounded-full ${rec.status==='present'?'bg-green-500':'bg-slate-700'}"></div>
-                                                    <span class="font-bold text-lg">${m.name}</span>
+                                            <div class="bg-slate-900 p-4 rounded-2xl flex flex-col md:flex-row items-center gap-4 border border-slate-800 hover:border-slate-700 transition-all">
+                                                <span class="font-bold w-full md:w-24 text-center md:text-left text-lg">${m.name}</span>
+                                                <div class="flex bg-black p-1 rounded-xl border border-slate-800">
+                                                    <button onclick="updateStatus('${m.id}', 'present')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='present'?'bg-green-500 text-black shadow-lg shadow-green-500/20':'text-slate-600 hover:text-slate-400'}">出席</button>
+                                                    <button onclick="updateStatus('${m.id}', 'absent')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='absent'?'bg-rose-500 text-black shadow-lg shadow-rose-500/20':'text-slate-600 hover:text-slate-400'}">缺席</button>
                                                 </div>
-                                                <div class="flex bg-slate-950 p-1 rounded-xl border border-slate-800 w-full md:w-auto">
-                                                    <button onclick="updateStatus('${m.id}', 'present')" class="flex-1 md:px-6 py-2 rounded-lg text-xs font-black transition-all ${rec.status==='present'?'bg-green-500 text-green-950 shadow-lg shadow-green-500/20':'text-slate-500 hover:text-slate-300'}">出席</button>
-                                                    <button onclick="updateStatus('${m.id}', 'absent')" class="flex-1 md:px-6 py-2 rounded-lg text-xs font-black transition-all ${rec.status==='absent'?'bg-rose-500 text-rose-950 shadow-lg shadow-rose-500/20':'text-slate-500 hover:text-slate-300'}">缺席</button>
-                                                </div>
-                                                <input type="text" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="w-full flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500 outline-none rounded-xl px-4 py-2 text-sm transition-all" placeholder="輸入今日表現評語...">
+                                                <input type="text" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-amber-500 outline-none" placeholder="輸入今日訓練評語...">
                                             </div>
                                         `;
                                     }).join('')}
@@ -200,67 +183,50 @@
 
         function renderParentHTML() {
             return `
-                <div class="max-w-md mx-auto p-6 min-h-screen flex flex-col justify-center animate-in">
-                    <div class="text-center mb-10">
-                        <h2 class="text-5xl font-black italic tracking-tighter">TIGERS <span class="text-amber-500 underline decoration-4 underline-offset-8">ELITE</span></h2>
-                        <p class="mt-4 text-slate-500 font-bold uppercase tracking-widest text-xs">Player Performance Portal</p>
+                <div class="max-w-md mx-auto p-8 min-h-screen flex flex-col justify-center animate-in">
+                    <div class="text-center mb-8">
+                        <h2 class="text-5xl font-black italic tracking-tighter">TIGERS <span class="text-amber-500">ELITE</span></h2>
+                        <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Player Portal</p>
                     </div>
                     <div class="bg-slate-900 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl relative overflow-hidden">
-                        <div class="absolute top-0 right-0 p-4">
-                            <div class="w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center">
-                                <span class="text-amber-500 text-xl font-black">虎</span>
-                            </div>
-                        </div>
-                        <label class="block text-slate-500 text-[10px] font-black uppercase mb-2 ml-1">球員姓名</label>
-                        <input id="parentSearchInput" type="text" placeholder="例：王小虎" class="w-full bg-slate-950 border-2 border-slate-800 rounded-2xl px-4 py-5 text-center text-2xl mb-6 focus:border-amber-500 outline-none transition-all placeholder:text-slate-800">
-                        <button onclick="searchChild()" class="w-full bg-amber-500 hover:bg-amber-400 active:scale-[0.98] text-slate-950 font-black py-5 rounded-2xl text-lg shadow-xl shadow-amber-500/20 transition-all">
+                        <div class="absolute top-0 right-0 p-4 text-amber-500/20 text-6xl font-black italic select-none">T</div>
+                        <label class="block text-slate-500 text-[10px] font-black uppercase mb-2 ml-1">請輸入球員姓名</label>
+                        <input id="parentSearchInput" type="text" placeholder="例：王小明" class="w-full bg-black border-2 border-slate-800 rounded-2xl px-4 py-5 text-center text-2xl mb-6 focus:border-amber-500 outline-none transition-all placeholder:text-slate-900">
+                        <button onclick="searchChild()" class="w-full bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black py-5 rounded-2xl text-lg shadow-xl shadow-amber-500/20 transition-all">
                             查看今日訓練成果
                         </button>
-                        <div id="searchResult" class="mt-8 min-h-[100px] flex items-center justify-center">
-                             <p class="text-slate-700 text-sm italic">輸入姓名後點擊查詢</p>
-                        </div>
+                        <div id="searchResult" class="mt-8 min-h-[50px] flex items-center justify-center"></div>
                     </div>
-                    <button onclick="switchView('coach')" class="mt-12 text-slate-700 hover:text-slate-500 text-[10px] uppercase font-black tracking-widest transition-colors">Coach Administrator Login</button>
+                    <button onclick="switchView('coach')" class="mt-12 text-slate-700 hover:text-slate-400 text-[10px] uppercase font-black tracking-widest transition-colors">Admin Dashboard</button>
                 </div>
             `;
         }
 
         function renderManageHTML() {
             return `
-                <div class="max-w-4xl mx-auto p-4 md:p-8 animate-in">
+                <div class="max-w-2xl mx-auto p-6 animate-in">
                     <div class="flex justify-between items-center mb-8">
-                        <h2 class="text-2xl font-black text-white">球員名單管理</h2>
-                        <button onclick="switchView('coach')" class="text-slate-400 hover:text-white text-sm font-bold flex items-center gap-2">
-                            <span>← 返回點名系統</span>
-                        </button>
+                        <h2 class="text-2xl font-black">球員名單管理</h2>
+                        <button onclick="switchView('coach')" class="text-slate-500 text-xs font-bold hover:text-white transition-colors">← 返回</button>
                     </div>
-
-                    <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl mb-8">
-                        <p class="text-xs font-black text-amber-500 mb-4 uppercase">新增球員</p>
-                        <div class="flex flex-col md:flex-row gap-4">
-                            <input id="newMemName" type="text" placeholder="球員姓名" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-amber-500">
-                            <select id="newMemRole" class="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-amber-500">
-                                <option value="U9">U9</option>
-                                <option value="U10">U10</option>
-                                <option value="U12">U12</option>
-                                <option value="Coach">Coach</option>
+                    <div class="bg-slate-900 p-6 rounded-3xl border border-slate-800 mb-8">
+                        <p class="text-[10px] font-black text-amber-500 mb-4 uppercase tracking-widest">新增學員</p>
+                        <div class="flex flex-col md:flex-row gap-3">
+                            <input id="newMemName" type="text" placeholder="學員姓名" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500 outline-none">
+                            <select id="newMemRole" class="bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:border-amber-500 outline-none">
+                                <option value="U9">U9</option><option value="U10">U10</option><option value="U12">U12</option><option value="Coach">Coach</option>
                             </select>
-                            <button onclick="addMember()" class="bg-white text-black font-black px-8 py-3 rounded-xl hover:bg-slate-200 transition-colors">新增成員</button>
+                            <button onclick="addMember()" class="bg-white text-black font-black px-8 py-3 rounded-xl text-sm hover:bg-slate-200 transition-colors">新增</button>
                         </div>
                     </div>
-
-                    <div class="grid gap-2">
-                        ${members.sort((a,b) => a.role.localeCompare(b.role)).map(m => `
-                            <div class="bg-slate-900/30 border border-slate-800 px-6 py-4 rounded-2xl flex justify-between items-center">
+                    <div class="space-y-2">
+                        ${members.sort((a,b)=>a.role.localeCompare(b.role)).map(m => `
+                            <div class="bg-slate-900 px-6 py-4 rounded-2xl flex justify-between items-center border border-slate-800">
                                 <div class="flex items-center gap-4">
-                                    <span class="text-[10px] font-black bg-slate-800 px-2 py-1 rounded text-slate-400">${m.role}</span>
-                                    <span class="font-bold">${m.name}</span>
+                                    <span class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-500 font-bold">${m.role}</span>
+                                    <span class="font-bold text-lg">${m.name}</span>
                                 </div>
-                                <button onclick="deleteMember('${m.id}')" class="text-rose-500 hover:text-rose-400 p-2 transition-colors">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                    </svg>
-                                </button>
+                                <button onclick="deleteMember('${m.id}')" class="text-rose-500 hover:text-rose-400 p-2 transition-colors text-xs font-bold">移除</button>
                             </div>
                         `).join('')}
                     </div>
@@ -271,28 +237,12 @@
         window.onload = initSystem;
     </script>
     <style>
-        body { background: #020617; color: white; font-family: 'Inter', system-ui, -apple-system, sans-serif; letter-spacing: -0.01em; }
+        body { background: #020617; color: white; font-family: 'Inter', system-ui, sans-serif; }
         .animate-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        
-        /* 自定義捲軸 */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #334155; }
-
-        input[type="date"]::-webkit-calendar-picker-indicator {
-            filter: invert(1);
-            cursor: pointer;
-        }
     </style>
 </head>
-<body class="selection:bg-amber-500/30 selection:text-amber-200">
-    <div id="app">
-        <div class="flex flex-col items-center justify-center min-h-screen gap-6">
-            <div class="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-            <p class="text-slate-500 font-black uppercase tracking-[0.4em] text-[10px] animate-pulse">Initializing Tigers System...</p>
-        </div>
-    </div>
-</body>
+<body><div id="app"></div></body>
 </html>
