@@ -8,7 +8,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, deleteDoc, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
         const defaultFirebaseConfig = {
@@ -35,9 +35,9 @@
         let attendanceData = {}; 
         let viewMode = 'coach';
         let currentDate = new Date().toISOString().split('T')[0];
+        let editingId = null;
 
         async function initSystem() {
-            const root = document.getElementById('app');
             try {
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
@@ -57,7 +57,6 @@
                 });
             } catch (e) {
                 console.error("系統啟動失敗:", e);
-                root.innerHTML = `<div class="p-10 text-rose-500 text-center">連線失敗，請確認 Firebase 設定。</div>`;
             }
         }
 
@@ -93,9 +92,33 @@
         window.addMember = async () => {
             const name = document.getElementById('newMemName').value.trim();
             const role = document.getElementById('newMemRole').value;
+            const number = document.getElementById('newMemNumber').value.trim();
             if (!name) return;
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), { name, role, createdAt: Date.now() });
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), { 
+                name, 
+                role, 
+                number: number || '--',
+                createdAt: Date.now() 
+            });
             document.getElementById('newMemName').value = '';
+            document.getElementById('newMemNumber').value = '';
+        };
+
+        window.startEdit = (id) => {
+            editingId = id;
+            renderApp();
+        };
+
+        window.saveEdit = async (id) => {
+            const name = document.getElementById(`editName-${id}`).value.trim();
+            const role = document.getElementById(`editRole-${id}`).value;
+            const number = document.getElementById(`editNumber-${id}`).value.trim();
+            if (!name) return;
+            
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', id);
+            await updateDoc(docRef, { name, role, number });
+            editingId = null;
+            renderApp();
         };
 
         window.deleteMember = async (id) => {
@@ -116,7 +139,6 @@
             renderApp(); 
         };
 
-        // 一鍵產出報告照片截圖功能
         window.captureReport = async () => {
             const btn = document.getElementById('captureBtn');
             const originalText = btn.innerText;
@@ -124,12 +146,12 @@
             btn.disabled = true;
 
             const reportEl = document.getElementById('reportCaptureArea');
-            reportEl.classList.remove('hidden'); // 暫時顯示出來進行截圖
+            reportEl.classList.remove('hidden');
             
             try {
                 const canvas = await html2canvas(reportEl, {
                     backgroundColor: '#020617',
-                    scale: 2, // 提高解析度
+                    scale: 2,
                     logging: false
                 });
                 
@@ -139,7 +161,7 @@
                 link.click();
             } catch (err) {
                 console.error("截圖失敗:", err);
-                alert("截圖生成失敗，請重試");
+                alert("截圖生成失敗");
             } finally {
                 reportEl.classList.add('hidden');
                 btn.innerText = originalText;
@@ -157,7 +179,7 @@
             const record = attSnap.exists() ? (attSnap.data()[result.id] || {}) : {};
             container.innerHTML = `
                 <div class="bg-slate-900 border border-amber-500/50 p-6 rounded-2xl text-left animate-in shadow-xl">
-                    <p class="text-amber-500 font-black text-xl">${result.name}</p>
+                    <p class="text-amber-500 font-black text-xl">#${result.number || '--'} ${result.name}</p>
                     <p class="text-slate-500 text-[10px] mb-4 uppercase font-bold tracking-widest">${currentDate}</p>
                     <div class="space-y-4">
                         <div class="flex justify-between border-b border-slate-800 pb-2">
@@ -165,8 +187,8 @@
                             <span class="font-black ${record.status==='present'?'text-green-400':'text-rose-400'}">${record.status==='present'?'出席':'未到'}</span>
                         </div>
                         <div>
-                            <p class="text-[10px] text-slate-500 mb-1 uppercase font-black">教練今日點評</p>
-                            <p class="text-slate-200 italic bg-black/50 p-4 rounded-xl border border-slate-800 text-sm leading-relaxed">"${record.feedback || '球員今日表現穩定，專注度良好！'}"</p>
+                            <p class="text-[10px] text-slate-500 mb-1 uppercase font-black">教練評語</p>
+                            <p class="text-slate-200 italic bg-black/50 p-4 rounded-xl border border-slate-800 text-sm leading-relaxed">"${record.feedback || '今日表現穩定，持續加油！'}"</p>
                         </div>
                     </div>
                 </div>
@@ -193,11 +215,10 @@
                             <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-xs border border-slate-700 outline-none">
                             <button id="captureBtn" onclick="captureReport()" class="bg-indigo-600 text-white text-[10px] px-4 py-2 rounded-xl font-black hover:bg-indigo-500 transition-all uppercase">產出日報圖卡</button>
                             <button onclick="switchView('manage')" class="bg-slate-800 text-[10px] px-4 py-2 rounded-xl font-black hover:bg-slate-700 transition-all uppercase">球員管理</button>
-                            <button onclick="switchView('parent')" class="bg-amber-500 text-black text-[10px] px-4 py-2 rounded-xl font-black hover:bg-amber-400 transition-all uppercase">查詢模式</button>
+                            <button onclick="switchView('parent')" class="bg-amber-500 text-black text-[10px] px-4 py-2 rounded-xl font-black hover:bg-amber-400 transition-all uppercase">家長查詢</button>
                         </div>
                     </div>
 
-                    <!-- 隱藏的截圖區域 -->
                     <div id="reportCaptureArea" class="hidden p-10 bg-[#020617] text-white w-[600px]">
                         <div class="text-center mb-8 border-b border-slate-800 pb-6">
                             <h2 class="text-4xl font-black text-amber-500 italic">TIGERS ELITE PRO</h2>
@@ -215,8 +236,8 @@
                                                 const rec = attendanceData[m.id] || {};
                                                 return `
                                                     <div class="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800">
-                                                        <span class="font-bold">${m.name}</span>
-                                                        <span class="${rec.status==='present'?'text-green-400':'text-rose-500'} font-black text-sm">
+                                                        <span class="font-bold"><span class="text-slate-500 mr-1 text-xs">#${m.number || '--'}</span>${m.name}</span>
+                                                        <span class="${rec.status==='present'?'text-green-400':'text-rose-500'} font-black text-[10px]">
                                                             ${rec.status==='present'?'● 出席':'○ 未到'}
                                                         </span>
                                                     </div>
@@ -227,9 +248,7 @@
                                 `;
                             }).join('')}
                         </div>
-                        <div class="mt-10 pt-6 border-t border-slate-800 text-center text-slate-600 text-xs italic">
-                            Generated by Tigers Elite Management System
-                        </div>
+                        <div class="mt-10 pt-6 border-t border-slate-800 text-center text-slate-600 text-[10px]">Tigers Elite Management System</div>
                     </div>
 
                     <div class="space-y-10">
@@ -238,18 +257,21 @@
                             if (groupMembers.length === 0) return '';
                             return `
                                 <div>
-                                    <p class="text-[10px] text-slate-500 font-black mb-4 tracking-widest uppercase border-l-4 border-amber-500 pl-3">組別: ${group}</p>
+                                    <p class="text-[10px] text-slate-500 font-black mb-4 tracking-widest uppercase border-l-4 border-amber-500 pl-3">${group} 組別</p>
                                     <div class="grid gap-3">
                                         ${groupMembers.map(m => {
                                             const rec = attendanceData[m.id] || {};
                                             return `
-                                                <div class="bg-slate-900 p-4 rounded-2xl flex flex-col md:flex-row items-center gap-4 border border-slate-800 hover:border-slate-700 transition-all">
-                                                    <span class="font-bold w-full md:w-24 text-center md:text-left text-lg">${m.name}</span>
-                                                    <div class="flex bg-black p-1 rounded-xl border border-slate-800">
-                                                        <button onclick="updateStatus('${m.id}', 'present')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='present'?'bg-green-500 text-black shadow-lg shadow-green-500/20':'text-slate-600 hover:text-slate-400'}">出席</button>
-                                                        <button onclick="updateStatus('${m.id}', 'absent')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='absent'?'bg-rose-500 text-black shadow-lg shadow-rose-500/20':'text-slate-600 hover:text-slate-400'}">缺席</button>
+                                                <div class="bg-slate-900 p-4 rounded-2xl flex flex-col md:flex-row items-center gap-4 border border-slate-800">
+                                                    <div class="w-full md:w-32 flex items-center gap-2">
+                                                        <span class="text-amber-500/50 font-mono text-sm font-black">#${m.number || '--'}</span>
+                                                        <span class="font-bold text-lg truncate">${m.name}</span>
                                                     </div>
-                                                    <input type="text" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-amber-500 outline-none" placeholder="輸入今日訓練評語...">
+                                                    <div class="flex bg-black p-1 rounded-xl border border-slate-800">
+                                                        <button onclick="updateStatus('${m.id}', 'present')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='present'?'bg-green-500 text-black shadow-lg shadow-green-500/20':'text-slate-600'}">出席</button>
+                                                        <button onclick="updateStatus('${m.id}', 'absent')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='absent'?'bg-rose-500 text-black shadow-lg shadow-rose-500/20':'text-slate-600'}">缺席</button>
+                                                    </div>
+                                                    <input type="text" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-amber-500 outline-none text-white" placeholder="今日訓練評語...">
                                                 </div>
                                             `;
                                         }).join('')}
@@ -270,12 +292,8 @@
                         <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Player Portal</p>
                     </div>
                     <div class="bg-slate-900 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl relative overflow-hidden">
-                        <div class="absolute top-0 right-0 p-4 text-amber-500/20 text-6xl font-black italic select-none">T</div>
-                        <label class="block text-slate-500 text-[10px] font-black uppercase mb-2 ml-1">請輸入球員姓名</label>
-                        <input id="parentSearchInput" type="text" placeholder="例：王小明" class="w-full bg-black border-2 border-slate-800 rounded-2xl px-4 py-5 text-center text-2xl mb-6 focus:border-amber-500 outline-none transition-all placeholder:text-slate-900 text-white">
-                        <button onclick="searchChild()" class="w-full bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black py-5 rounded-2xl text-lg shadow-xl shadow-amber-500/20 transition-all">
-                            查看今日訓練成果
-                        </button>
+                        <input id="parentSearchInput" type="text" placeholder="輸入球員姓名" class="w-full bg-black border-2 border-slate-800 rounded-2xl px-4 py-5 text-center text-2xl mb-6 focus:border-amber-500 outline-none text-white">
+                        <button onclick="searchChild()" class="w-full bg-amber-500 text-slate-950 font-black py-5 rounded-2xl text-lg shadow-xl shadow-amber-500/20">查詢今日成果</button>
                         <div id="searchResult" class="mt-8 min-h-[50px] flex items-center justify-center"></div>
                     </div>
                     <button onclick="switchView('coach')" class="mt-12 text-slate-700 hover:text-slate-400 text-[10px] uppercase font-black tracking-widest transition-colors">Admin Dashboard</button>
@@ -285,31 +303,56 @@
 
         function renderManageHTML() {
             return `
-                <div class="max-w-2xl mx-auto p-6 animate-in">
+                <div class="max-w-3xl mx-auto p-6 animate-in">
                     <div class="flex justify-between items-center mb-8">
-                        <h2 class="text-2xl font-black">球員名單管理</h2>
+                        <h2 class="text-2xl font-black">人員名單管理</h2>
                         <button onclick="switchView('coach')" class="text-slate-500 text-xs font-bold hover:text-white transition-colors">← 返回</button>
                     </div>
                     <div class="bg-slate-900 p-6 rounded-3xl border border-slate-800 mb-8">
-                        <p class="text-[10px] font-black text-amber-500 mb-4 uppercase tracking-widest">新增人員</p>
+                        <p class="text-[10px] font-black text-amber-500 mb-4 uppercase tracking-widest tracking-widest">新增人員</p>
                         <div class="flex flex-col md:flex-row gap-3">
-                            <input id="newMemName" type="text" placeholder="人員姓名" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500 outline-none text-white">
+                            <input id="newMemNumber" type="text" placeholder="背號" class="w-full md:w-20 bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:border-amber-500 outline-none">
+                            <input id="newMemName" type="text" placeholder="姓名" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:border-amber-500 outline-none">
                             <select id="newMemRole" class="bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:border-amber-500 outline-none">
                                 <option value="Coach">Coach</option><option value="U9">U9</option><option value="U10">U10</option><option value="U12">U12</option>
                             </select>
-                            <button onclick="addMember()" class="bg-white text-black font-black px-8 py-3 rounded-xl text-sm hover:bg-slate-200 transition-colors">新增</button>
+                            <button onclick="addMember()" class="bg-white text-black font-black px-8 py-3 rounded-xl text-sm hover:bg-slate-200">新增</button>
                         </div>
                     </div>
-                    <div class="space-y-2">
-                        ${members.sort((a,b)=>a.role.localeCompare(b.role)).map(m => `
-                            <div class="bg-slate-900 px-6 py-4 rounded-2xl flex justify-between items-center border border-slate-800">
-                                <div class="flex items-center gap-4">
-                                    <span class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-500 font-bold">${m.role}</span>
-                                    <span class="font-bold text-lg">${m.name}</span>
+                    <div class="space-y-3">
+                        ${members.sort((a,b)=>a.role.localeCompare(b.role)).map(m => {
+                            if (editingId === m.id) {
+                                return `
+                                    <div class="bg-slate-800 p-4 rounded-2xl flex flex-col md:flex-row gap-3 border-2 border-amber-500/50">
+                                        <input id="editNumber-${m.id}" type="text" value="${m.number || ''}" class="w-20 bg-black border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                                        <input id="editName-${m.id}" type="text" value="${m.name}" class="flex-1 bg-black border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                                        <select id="editRole-${m.id}" class="bg-black border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                                            <option value="Coach" ${m.role==='Coach'?'selected':''}>Coach</option>
+                                            <option value="U9" ${m.role==='U9'?'selected':''}>U9</option>
+                                            <option value="U10" ${m.role==='U10'?'selected':''}>U10</option>
+                                            <option value="U12" ${m.role==='U12'?'selected':''}>U12</option>
+                                        </select>
+                                        <div class="flex gap-2">
+                                            <button onclick="saveEdit('${m.id}')" class="bg-green-600 px-4 py-2 rounded-lg text-xs font-bold">儲存</button>
+                                            <button onclick="startEdit(null)" class="bg-slate-700 px-4 py-2 rounded-lg text-xs font-bold">取消</button>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                            return `
+                                <div class="bg-slate-900 px-6 py-4 rounded-2xl flex justify-between items-center border border-slate-800 group">
+                                    <div class="flex items-center gap-4">
+                                        <span class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-500 font-bold">${m.role}</span>
+                                        <span class="font-mono text-amber-500 font-bold">#${m.number || '--'}</span>
+                                        <span class="font-bold text-lg">${m.name}</span>
+                                    </div>
+                                    <div class="flex gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onclick="startEdit('${m.id}')" class="text-amber-500 text-xs font-bold">編輯</button>
+                                        <button onclick="deleteMember('${m.id}')" class="text-rose-500 text-xs font-bold">移除</button>
+                                    </div>
                                 </div>
-                                <button onclick="deleteMember('${m.id}')" class="text-rose-500 hover:text-rose-400 p-2 transition-colors text-xs font-bold">移除</button>
-                            </div>
-                        `).join('')}
+                            `;
+                        }).join('')}
                     </div>
                 </div>
             `;
