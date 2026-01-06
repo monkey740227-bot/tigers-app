@@ -33,9 +33,37 @@
         let app, auth, db, user;
         let members = [];
         let attendanceData = {}; 
-        let viewMode = 'coach';
+        let viewMode = 'parent'; // 預設改為家長模式以符合安全邏輯
         let currentDate = new Date().toISOString().split('T')[0];
         let editingId = null;
+        let authTimer = null;
+
+        // --- 權限管理邏輯 ---
+        const AUTH_TIMEOUT = 5 * 60 * 1000; // 5分鐘
+
+        function updateAuthTimestamp() {
+            if (viewMode === 'parent') return;
+            sessionStorage.setItem('admin_auth_timestamp', Date.now().toString());
+            resetAutoLogout();
+        }
+
+        function checkAuthValid() {
+            const timestamp = sessionStorage.getItem('admin_auth_timestamp');
+            if (!timestamp) return false;
+            return (Date.now() - parseInt(timestamp)) < AUTH_TIMEOUT;
+        }
+
+        function resetAutoLogout() {
+            if (authTimer) clearTimeout(authTimer);
+            authTimer = setTimeout(() => {
+                if (viewMode !== 'parent') {
+                    console.log("Session expired, logging out...");
+                    sessionStorage.removeItem('admin_auth_timestamp');
+                    viewMode = 'parent';
+                    renderApp();
+                }
+            }, AUTH_TIMEOUT);
+        }
 
         async function initSystem() {
             try {
@@ -52,6 +80,11 @@
                 onAuthStateChanged(auth, (u) => {
                     if (u) {
                         user = u;
+                        // 如果 session 還有效，自動進入 coach 模式
+                        if (checkAuthValid()) {
+                            viewMode = 'coach';
+                            resetAutoLogout();
+                        }
                         loadData();
                     }
                 });
@@ -77,6 +110,7 @@
         }
 
         window.updateStatus = async (id, status) => {
+            updateAuthTimestamp();
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
             attendanceData[id] = { ...(attendanceData[id] || {}), status };
             await setDoc(docRef, attendanceData, { merge: true });
@@ -84,12 +118,14 @@
         };
 
         window.updateFeedback = async (id, text) => {
+            updateAuthTimestamp();
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
             attendanceData[id] = { ...(attendanceData[id] || {}), feedback: text };
             await setDoc(docRef, attendanceData, { merge: true });
         };
 
         window.addMember = async () => {
+            updateAuthTimestamp();
             const name = document.getElementById('newMemName').value.trim();
             const role = document.getElementById('newMemRole').value;
             const number = document.getElementById('newMemNumber').value.trim();
@@ -105,16 +141,17 @@
         };
 
         window.startEdit = (id) => {
+            updateAuthTimestamp();
             editingId = id;
             renderApp();
         };
 
         window.saveEdit = async (id) => {
+            updateAuthTimestamp();
             const name = document.getElementById(`editName-${id}`).value.trim();
             const role = document.getElementById(`editRole-${id}`).value;
             const number = document.getElementById(`editNumber-${id}`).value.trim();
             if (!name) return;
-            
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', id);
             await updateDoc(docRef, { name, role, number });
             editingId = null;
@@ -122,17 +159,29 @@
         };
 
         window.deleteMember = async (id) => {
+            updateAuthTimestamp();
             if (confirm('確定要移除此成員？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', id));
         };
 
-        window.changeDate = (date) => { currentDate = date; loadAttendance(date); };
+        window.changeDate = (date) => { 
+            updateAuthTimestamp();
+            currentDate = date; 
+            loadAttendance(date); 
+        };
         
         window.switchView = (mode) => { 
-            if (mode === 'manage') {
-                const pwd = prompt("請輸入管理密碼：");
-                if (pwd !== '0227') {
-                    alert("密碼錯誤，拒絕存取。");
-                    return;
+            if (mode === 'manage' || mode === 'coach') {
+                if (!checkAuthValid()) {
+                    const pwd = prompt("請輸入管理密碼：");
+                    if (pwd !== '0227') {
+                        alert("密碼錯誤，拒絕存取。");
+                        return;
+                    }
+                    sessionStorage.setItem('admin_auth_timestamp', Date.now().toString());
+                    resetAutoLogout();
+                } else {
+                    // 若驗證有效，切換動作也視為活躍
+                    updateAuthTimestamp();
                 }
             }
             viewMode = mode; 
@@ -140,6 +189,7 @@
         };
 
         window.captureReport = async () => {
+            updateAuthTimestamp();
             const btn = document.getElementById('captureBtn');
             const originalText = btn.innerText;
             btn.innerText = "生成中...";
@@ -154,14 +204,12 @@
                     scale: 2,
                     logging: false
                 });
-                
                 const link = document.createElement('a');
                 link.download = `美育虎訓練日報_${currentDate}.png`;
                 link.href = canvas.toDataURL('image/png');
                 link.click();
             } catch (err) {
                 console.error("截圖失敗:", err);
-                alert("截圖生成失敗");
             } finally {
                 reportEl.classList.add('hidden');
                 btn.innerText = originalText;
@@ -169,7 +217,6 @@
             }
         };
 
-        // 家長查詢增強功能
         window.searchChild = async () => {
             const name = document.getElementById('parentSearchInput').value.trim();
             const result = members.find(m => m.name === name);
@@ -178,7 +225,6 @@
             
             container.innerHTML = `<div class="text-slate-400 text-sm italic py-4">正在分析數據，請稍候...</div>`;
 
-            // 1. 獲取本月數據
             const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -190,10 +236,9 @@
             const twoWeeksAgo = new Date();
             twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
 
-            // 遍歷本月所有日期
             for(let i = 1; i <= daysInMonth; i++) {
                 const dateStr = `${year}-${month}-${String(i).padStart(2, '0')}`;
-                if (dateStr > currentDate) continue; // 不查詢未來
+                if (dateStr > currentDate) continue;
 
                 const attRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', dateStr);
                 const attSnap = await getDoc(attRef);
@@ -203,8 +248,6 @@
                     if (dayData) {
                         monthlyTotal++;
                         if (dayData.status === 'present') monthlyPresent++;
-                        
-                        // 收集近兩週評語
                         const thisDate = new Date(dateStr);
                         if (thisDate >= twoWeeksAgo && dayData.feedback) {
                             recentFeedbacks.push({ date: dateStr, text: dayData.feedback });
@@ -227,12 +270,9 @@
                             <span class="text-2xl font-black text-green-400">${attendanceRate}%</span>
                         </div>
                     </div>
-
-                    <!-- 出席率進度條 -->
                     <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                         <div class="bg-green-400 h-full transition-all duration-1000" style="width: ${attendanceRate}%"></div>
                     </div>
-
                     <div class="grid grid-cols-2 gap-4 text-center">
                         <div class="bg-slate-800/50 p-3 rounded-xl border border-slate-700">
                             <span class="text-[10px] text-slate-500 block">應到次數</span>
@@ -243,7 +283,6 @@
                             <span class="text-lg font-bold text-white">${monthlyPresent}</span>
                         </div>
                     </div>
-
                     <div>
                         <p class="text-[10px] text-slate-400 mb-3 uppercase font-black tracking-widest border-l-2 border-amber-500 pl-2">近期教練點評 (近14天)</p>
                         <div class="space-y-3">
@@ -271,18 +310,22 @@
 
         function renderCoachHTML() {
             const groups = ['Coach', 'U9', 'U10', 'U12'];
+            const timeLeft = checkAuthValid() ? Math.ceil((AUTH_TIMEOUT - (Date.now() - parseInt(sessionStorage.getItem('admin_auth_timestamp')))) / 1000 / 60) : 0;
             return `
                 <div class="max-w-4xl mx-auto p-6 animate-in">
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
                         <div>
                             <h1 class="text-3xl font-black text-amber-500 italic">TIGERS <span class="text-white">ELITE</span></h1>
-                            <p class="text-[10px] text-slate-500 font-bold tracking-[0.3em] uppercase">Control Dashboard</p>
+                            <div class="flex items-center gap-2">
+                                <p class="text-[10px] text-slate-500 font-bold tracking-[0.3em] uppercase">Control Dashboard</p>
+                                <span class="text-[9px] bg-slate-800 text-amber-500/70 px-2 py-0.5 rounded-full border border-slate-700">Session: ~${timeLeft}min</span>
+                            </div>
                         </div>
                         <div class="flex flex-wrap gap-2">
                             <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-xs border border-slate-700 outline-none">
                             <button id="captureBtn" onclick="captureReport()" class="bg-indigo-600 text-white text-[10px] px-4 py-2 rounded-xl font-black hover:bg-indigo-500 transition-all uppercase">產出日報圖卡</button>
                             <button onclick="switchView('manage')" class="bg-slate-800 text-[10px] px-4 py-2 rounded-xl font-black hover:bg-slate-700 transition-all uppercase">球員管理</button>
-                            <button onclick="switchView('parent')" class="bg-amber-500 text-black text-[10px] px-4 py-2 rounded-xl font-black hover:bg-amber-400 transition-all uppercase">家長查詢</button>
+                            <button onclick="switchView('parent')" class="bg-amber-500 text-black text-[10px] px-4 py-2 rounded-xl font-black hover:bg-amber-400 transition-all uppercase">離開後台</button>
                         </div>
                     </div>
 
@@ -331,13 +374,13 @@
                                                 <div class="bg-slate-900 p-4 rounded-2xl flex flex-col md:flex-row items-center gap-4 border border-slate-800">
                                                     <div class="w-full md:w-32 flex items-center gap-2">
                                                         <span class="text-amber-500/50 font-mono text-sm font-black">#${m.number || '--'}</span>
-                                                        <span class="font-bold text-lg truncate">${m.name}</span>
+                                                        <span class="font-bold text-lg truncate text-white">${m.name}</span>
                                                     </div>
                                                     <div class="flex bg-black p-1 rounded-xl border border-slate-800">
                                                         <button onclick="updateStatus('${m.id}', 'present')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='present'?'bg-green-500 text-black shadow-lg shadow-green-500/20':'text-slate-600'}">出席</button>
                                                         <button onclick="updateStatus('${m.id}', 'absent')" class="px-6 py-2 rounded-lg text-[10px] font-black transition-all ${rec.status==='absent'?'bg-rose-500 text-black shadow-lg shadow-rose-500/20':'text-slate-600'}">缺席</button>
                                                     </div>
-                                                    <input type="text" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-amber-500 outline-none text-white" placeholder="今日訓練評語...">
+                                                    <input type="text" oninput="updateAuthTimestamp()" onblur="updateFeedback('${m.id}', this.value)" value="${rec.feedback || ''}" class="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-amber-500 outline-none text-white" placeholder="今日訓練評語...">
                                                 </div>
                                             `;
                                         }).join('')}
