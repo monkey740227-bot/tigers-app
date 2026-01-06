@@ -3,17 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>美育虎 Tigers Elite Pro 管理系統</title>
+    <title>美育虎 Tigers Elite Pro 旗艦版</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
-        // --- 設定 (請確保此處有正確配置) ---
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"apiKey":"YOUR_API_KEY"}'); 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-elite-pro';
+        // --- 核心配置 ---
+        const firebaseConfig = {
+            apiKey: "BGQ1BXdmLUMnvQEy_5woULXzHLgjp4XgGW6cCoUxjTp_hAfv_t0tTT1_xWsiyVxCGtUlfOPNdJYQ-FitlzXg-Dw",
+            authDomain: "tigers-elite-v2.firebaseapp.com",
+            projectId: "tigers-elite-v2",
+            appId: "tigers-elite-v1"
+        };
         
         let app, auth, db;
         let members = [];
@@ -26,92 +29,84 @@
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                onAuthStateChanged(auth, (user) => { if (user) loadData(); else signInAnonymously(auth); });
-            } catch (e) { renderError(e.message); }
+                onAuthStateChanged(auth, (user) => { 
+                    if (user) loadMembers(); 
+                    else signInAnonymously(auth); 
+                });
+            } catch (e) {
+                renderError(e.message);
+            }
         }
 
-        async function loadData() {
-            const memCol = collection(db, 'artifacts', appId, 'public', 'data', 'members');
-            onSnapshot(memCol, async (snap) => {
+        // 1. 載入總名冊
+        async function loadMembers() {
+            const memCol = collection(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'members');
+            onSnapshot(memCol, (snap) => {
                 members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                await loadAttendance(currentDate);
+                loadAttendance(currentDate); // 確保名冊載入後再載入點名
             });
         }
 
+        // 2. 載入特定日期點名 (含自動同步邏輯)
         async function loadAttendance(date) {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
+            const docRef = doc(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'attendance', date);
             const snap = await getDoc(docRef);
-            attendanceData = snap.exists() ? snap.data() : {};
+            
+            if (snap.exists()) {
+                attendanceData = snap.data();
+            } else {
+                // 自動同步：如果當天沒紀錄，抓取目前所有成員初始化
+                attendanceData = {};
+                members.forEach(m => {
+                    attendanceData[m.id] = { name: m.name, status: 'none', feedback: '', role: m.role };
+                });
+                if (members.length > 0) await setDoc(docRef, attendanceData);
+            }
             renderApp();
         }
 
+        // 3. 一鍵全體出席
+        window.markAllPresent = async () => {
+            if (!confirm(`確定要將今日 (${currentDate}) 所有球員設為出席嗎？`)) return;
+            const docRef = doc(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'attendance', currentDate);
+            Object.keys(attendanceData).forEach(id => {
+                attendanceData[id].status = 'present';
+            });
+            await setDoc(docRef, attendanceData);
+            renderApp();
+        };
+
         window.updateStatus = async (id, status) => {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
-            attendanceData[id] = { ...(attendanceData[id] || {}), status };
-            await setDoc(docRef, attendanceData, { merge: true });
+            const docRef = doc(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'attendance', currentDate);
+            attendanceData[id] = { ...attendanceData[id], status };
+            await setDoc(docRef, attendanceData);
             renderApp();
         };
 
         window.updateFeedback = async (id, text) => {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
-            attendanceData[id] = { ...(attendanceData[id] || {}), feedback: text };
-            await setDoc(docRef, attendanceData, { merge: true });
+            const docRef = doc(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'attendance', currentDate);
+            attendanceData[id] = { ...attendanceData[id], feedback: text };
+            await setDoc(docRef, attendanceData);
         };
 
-        window.changeDate = (date) => {
-            currentDate = date;
-            loadAttendance(date);
+        window.addMember = async () => {
+            const name = prompt("球員姓名:");
+            const role = prompt("組別 (u9/u10/coach):", "u9");
+            if (!name) return;
+            await addDoc(collection(db, 'artifacts', 'tigers-elite-v1', 'public', 'data', 'members'), {
+                name, role, createdAt: new Date().toISOString()
+            });
+            // 新增後重新載入當天，以觸發同步
+            loadAttendance(currentDate);
         };
 
+        window.changeDate = (date) => { currentDate = date; loadAttendance(date); };
         window.switchView = (mode) => { viewMode = mode; renderApp(); };
 
         window.searchChild = async () => {
             const name = document.getElementById('parentSearchInput').value.trim();
-            const result = members.find(m => m.name === name);
             const container = document.getElementById('searchResult');
-            if (!result) { container.innerHTML = `<p class="text-rose-400 text-center">找不到該球員</p>`; return; }
-            
-            // 安全查詢：只抓今日該球員
-            const attRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
-            const attSnap = await getDoc(attRef);
-            const record = attSnap.exists() ? (attSnap.data()[result.id] || {}) : {};
+            container.innerHTML = `<p class="animate-pulse text-slate-500">搜尋中...</p>`;
 
-            container.innerHTML = `
-                <div class="bg-slate-900 border-2 border-amber-500 p-6 rounded-2xl animate-in">
-                    <p class="text-amber-500 font-black text-2xl mb-4">${result.name}</p>
-                    <div class="space-y-3">
-                        <div class="flex justify-between border-b border-slate-800 pb-2">
-                            <span class="text-slate-500 text-xs">出席狀態 (${currentDate})</span>
-                            <span class="font-bold ${record.status==='present'?'text-green-400':'text-rose-400'}">${record.status==='present'?'出席':'未到/未點'}</span>
-                        </div>
-                        <div class="pt-2">
-                            <p class="text-slate-500 text-xs mb-1">教練評語</p>
-                            <p class="text-slate-200 leading-relaxed">${record.feedback || '表現優異，繼續加油！'}</p>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
-        function renderApp() {
-            const root = document.getElementById('app');
-            root.innerHTML = viewMode === 'coach' ? renderCoachHTML() : renderParentHTML();
-        }
-
-        function renderCoachHTML() {
-            return `
-                <div class="max-w-4xl mx-auto p-4 md:p-8">
-                    <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-                        <h1 class="text-3xl font-black text-amber-500">TIGERS ELITE <span class="text-white">PRO</span></h1>
-                        <div class="flex gap-2">
-                            <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-sm border border-slate-700">
-                            <button onclick="switchView('parent')" class="bg-slate-800 px-4 py-2 rounded-xl text-sm font-bold">查詢模式</button>
-                        </div>
-                    </div>
-                    
-                    <div class="space-y-6">
-                        ${['coach', 'u9', 'u10'].map(role => `
-                            <div>
-                                <p class="text-[10px] font-black text-slate-600 tracking-widest mb-3 uppercase">${role}</p>
-                                <div class="grid gap-3">
-                                    ${members.filter(m
+            const member = members.find(m => m.name === name);
+            if (!member) { container.innerHTML = `<p class="text-rose-400">找不到
