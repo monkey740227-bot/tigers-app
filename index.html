@@ -1,325 +1,316 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, query } from 'firebase/firestore';
 import { 
-  getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  onSnapshot,
-  serverTimestamp 
-} from 'firebase/firestore';
-import { 
-  Users, UserCheck, Activity, Download, Plus, Trash2, ShieldCheck, AlertCircle, Loader2
+  Users, UserCheck, Search, Download, Plus, Trash2, ShieldCheck, 
+  ChevronDown, ChevronUp, Save, MessageSquare, ClipboardList, LogOut
 } from 'lucide-react';
 
-/**
- * --- 系統核心配置 ---
- * 這裡自動抓取你的 Firebase 設定與 AppID。
- * appId 決定了資料會存放在雲端的哪個資料夾，確保 U12 與 U10 不會混在一起。
- */
+// --- Firebase 配置 ---
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-u12-pro';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-u9-u10-system';
 
 export default function App() {
-  // --- 狀態管理 ---
-  const [user, setUser] = useState(null);       // 登入用戶狀態
-  const [loading, setLoading] = useState(true); // 載入中狀態
-  const [error, setError] = useState(null);     // 錯誤訊息
-  const [activeTab, setActiveTab] = useState('attendance'); // 當前分頁
-  const [isCapturing, setIsCapturing] = useState(false);    // 是否正在截圖
-  const captureRef = useRef(null);              // 截圖目標區域
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('admin'); // 'admin' 或 'parent'
+  const [activeTab, setActiveTab] = useState('attendance');
+  const [searchName, setSearchName] = useState('');
+  const [searchResult, setSearchResult] = useState(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const captureRef = useRef(null);
 
-  // 本地資料存儲：成員、教練、最後更新時間
+  // 雲端數據狀態
   const [data, setData] = useState({
-    members: [],
     coaches: [],
+    u9: [],
+    u10: [],
     lastUpdated: null
   });
 
-  // --- 1. 身份驗證 (確保安全進入雲端) ---
+  // 1. 初始化驗證
   useEffect(() => {
     const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        setError("連線失敗：請檢查 Firebase 授權網域。");
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
       }
     };
-
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       if (u) setLoading(false);
     });
-
     return () => unsubscribe();
   }, []);
 
-  // --- 2. 雲端數據同步 (Snapshot 實時監聽) ---
+  // 2. 雲端數據同步 (分流 appId)
   useEffect(() => {
     if (!user) return;
-
-    // 定義存儲路徑：/artifacts/{appId}/public/data/main/current
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
-    
-    // 開啟實時監聽：當雲端有人修改，你的手機會立刻更新
-    const unsubscribe = onSnapshot(docRef, 
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setData(docSnap.data());
-        } else {
-          // 如果雲端沒資料，就初始化一個空的
-          const initialData = { members: [], coaches: [], lastUpdated: new Date().toISOString() };
-          setDoc(docRef, initialData);
-          setData(initialData);
-        }
-        setError(null);
-      },
-      (err) => {
-        setError(`權限拒絕：請確認 Firestore Rules 已發布。`);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setData(docSnap.data());
+      } else {
+        const init = { coaches: [], u9: [], u10: [], lastUpdated: new Date().toISOString() };
+        setDoc(docRef, init);
+        setData(init);
       }
-    );
-
+    }, (err) => console.error("Firestore Error:", err));
     return () => unsubscribe();
   }, [user]);
 
-  // --- 3. 數據寫入 (將本地更改推送到雲端) ---
-  const persistData = async (newData) => {
+  // 3. 雲端儲存
+  const syncCloud = async (newData) => {
     if (!user) return;
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'main', 'current');
-    try {
-      await setDoc(docRef, { ...newData, lastUpdated: new Date().toISOString() });
-    } catch (err) {
-      setError("儲存失敗，請檢查網路。");
-    }
+    await setDoc(docRef, { ...newData, lastUpdated: new Date().toISOString() });
   };
 
-  // --- 4. 功能操作 (點名、增刪、筆記) ---
-
-  // 切換出席狀態：在席 -> 遲到 -> 缺席 循環
-  const toggleAttendance = (id) => {
-    const newMembers = data.members.map(m => {
-      if (m.id === id) {
-        const states = ['present', 'absent', 'late'];
-        const nextIdx = (states.indexOf(m.status || 'present') + 1) % states.length;
-        return { ...m, status: states[nextIdx] };
-      }
-      return m;
-    });
-    const newData = { ...data, members: newMembers };
-    setData(newData); // 為了順暢，先改 UI
-    persistData(newData); // 後同步雲端
-  };
-
-  // 新增成員或教練
-  const addPerson = (type) => {
-    const name = prompt(`請輸入姓名:`);
+  // --- 管理功能 ---
+  const addPerson = (group) => {
+    const name = prompt(`請輸入 ${group.toUpperCase()} 姓名:`);
     if (!name) return;
-    const newItem = {
-      id: `${type}-${Date.now()}`,
-      name,
-      status: 'present',
-      note: '',
-      role: type === 'coaches' ? 'Coach' : 'Player'
+    const newItem = { id: `${group}-${Date.now()}`, name, status: 'present', note: '', attendanceCount: 0 };
+    const newData = { ...data, [group]: [...data[group], newItem] };
+    syncCloud(newData);
+  };
+
+  const deletePerson = (group, id) => {
+    if (!window.confirm("確定刪除此人員？此操作無法撤回。")) return;
+    const newData = { ...data, [group]: data[group].filter(p => p.id !== id) };
+    syncCloud(newData);
+  };
+
+  const toggleStatus = (group, id) => {
+    const states = ['present', 'absent', 'late'];
+    const newData = {
+      ...data,
+      [group]: data[group].map(p => {
+        if (p.id === id) {
+          const next = states[(states.indexOf(p.status || 'present') + 1) % states.length];
+          return { ...p, status: next };
+        }
+        return p;
+      })
     };
-    const newData = { ...data, [type]: [...data[type], newItem] };
-    persistData(newData);
+    syncCloud(newData);
   };
 
-  // 刪除人員
-  const deletePerson = (type, id) => {
-    if (!window.confirm("確定移除此人？雲端資料將同步刪除。")) return;
-    const newData = { ...data, [type]: data[type].filter(p => p.id !== id) };
-    persistData(newData);
+  const updateNote = (group, id, note) => {
+    const newData = {
+      ...data,
+      [group]: data[group].map(p => p.id === id ? { ...p, note } : p)
+    };
+    syncCloud(newData);
   };
 
-  // 更新訓練表現筆記
-  const updateNote = (id, note) => {
-    const newMembers = data.members.map(m => m.id === id ? { ...m, note } : m);
-    persistData({ ...data, members: newMembers });
+  // 排序移動邏輯 (上/下)
+  const moveItem = (group, index, direction) => {
+    const newList = [...data[group]];
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= newList.length) return;
+    [newList[index], newList[targetIndex]] = [newList[targetIndex], newList[index]];
+    syncCloud({ ...data, [group]: newList });
   };
 
-  // --- 5. 導出報表 (截圖功能) ---
-  const handleExport = async () => {
-    if (!captureRef.current) return;
+  // --- 查詢功能 ---
+  const handleParentSearch = () => {
+    const allPlayers = [...data.u9, ...data.u10];
+    const found = allPlayers.find(p => p.name === searchName.trim());
+    setSearchResult(found || 'not_found');
+  };
+
+  // --- 截圖報表 ---
+  const downloadReport = async () => {
     setIsCapturing(true);
-    // 自動載入截圖套件
     if (!window.html2canvas) {
       const script = document.createElement('script');
       script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
       document.head.appendChild(script);
       await new Promise(r => script.onload = r);
     }
-    
     setTimeout(async () => {
-      const canvas = await window.html2canvas(captureRef.current, { backgroundColor: '#f8fafc', scale: 2 });
+      const canvas = await window.html2canvas(captureRef.current, { backgroundColor: '#0f172a', scale: 2 });
       const link = document.createElement('a');
       link.href = canvas.toDataURL("image/png");
-      link.download = `Tigers_Report_${new Date().toISOString().slice(0,10)}.png`;
+      link.download = `Tigers_Report_${new Date().toLocaleDateString()}.png`;
       link.click();
       setIsCapturing(false);
     }, 100);
   };
 
-  // 載入畫面
-  if (loading) return (
-    <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white">
-      <Loader2 className="animate-spin text-yellow-500 mb-4" size={40} />
-      <p className="font-bold tracking-widest text-sm italic italic">正在同步美育虎雲端...</p>
-    </div>
-  );
+  if (loading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-amber-400 font-bold">美育虎系統載入中...</div>;
 
   return (
-    <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col pb-20 shadow-2xl">
-      {/* 頂部藍區 */}
-      <header className="bg-slate-900 text-white p-6 rounded-b-[2.5rem] shadow-xl">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-black italic tracking-tighter text-yellow-500">MEI-YU TIGERS</h1>
-            <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mt-1">
-              {appId} / {new Date().toLocaleDateString('zh-TW')}
-            </p>
-          </div>
-          <div className="bg-slate-800 p-2 rounded-full">
-            <ShieldCheck size={20} className="text-green-400" />
-          </div>
-        </div>
+    <div className="max-w-md mx-auto min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-amber-500/30">
+      
+      {/* 頂部切換 */}
+      <div className="flex justify-center p-2 gap-4 bg-slate-800/50 backdrop-blur-md sticky top-0 z-50">
+        <button onClick={() => setView('admin')} className={`px-4 py-1 rounded-full text-xs font-bold transition ${view === 'admin' ? 'bg-amber-500 text-slate-900' : 'text-slate-400'}`}>教練管理模式</button>
+        <button onClick={() => setView('parent')} className={`px-4 py-1 rounded-full text-xs font-bold transition ${view === 'parent' ? 'bg-amber-500 text-slate-900' : 'text-slate-400'}`}>家長查詢模式</button>
+      </div>
 
-        {error && (
-          <div className="mt-4 bg-red-500/20 border border-red-500/50 p-3 rounded-xl flex items-center gap-2 text-xs text-red-200">
-            <AlertCircle size={14} />
-            <span>{error}</span>
-          </div>
-        )}
-      </header>
+      {view === 'admin' ? (
+        <div className="pb-24">
+          {/* Header */}
+          <header className="p-6 text-center">
+            <h1 className="text-3xl font-black italic tracking-tighter text-amber-500 uppercase">Tigers Elite</h1>
+            <p className="text-[10px] tracking-[0.3em] text-slate-400 font-bold">COACHING & ATTENDANCE SYSTEM</p>
+          </header>
 
-      {/* 分頁按鈕區 */}
-      <nav className="flex px-6 -mt-6 gap-2">
-        {[
-          { id: 'attendance', label: '點名回報', icon: UserCheck },
-          { id: 'training', label: '訓練筆記', icon: Activity },
-          { id: 'manage', label: '成員編輯', icon: Users }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-bold text-xs transition-all shadow-lg ${
-              activeTab === tab.id ? 'bg-yellow-500 text-slate-900 scale-105' : 'bg-white text-slate-400'
-            }`}
-          >
-            <tab.icon size={16} />
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-
-      {/* 主要內容區 */}
-      <main ref={captureRef} className="flex-1 p-6 space-y-8">
-        
-        {/* 分頁：點名 */}
-        {activeTab === 'attendance' && (
-          <section className="animate-in slide-in-from-bottom-4 duration-500">
-            <h2 className="font-black text-slate-800 mb-4">今日出席情況</h2>
-            <div className="grid grid-cols-3 gap-3">
-              {data.members.map(member => (
-                <button
-                  key={member.id}
-                  onClick={() => toggleAttendance(member.id)}
-                  className={`p-3 rounded-2xl border-2 transition-all flex flex-col items-center gap-1 ${
-                    member.status === 'present' ? 'bg-white border-green-500 text-green-700' :
-                    member.status === 'late' ? 'bg-yellow-50 border-yellow-400 text-yellow-700' :
-                    'bg-red-50 border-red-200 text-red-400 opacity-60'
-                  }`}
-                >
-                  <span className="font-black text-xs truncate w-full">{member.name}</span>
-                  <span className="text-[8px] font-bold uppercase">
-                    {member.status === 'present' ? '在席' : member.status === 'late' ? '遲到' : '缺席'}
-                  </span>
-                </button>
-              ))}
-              {!isCapturing && (
-                <button onClick={() => addPerson('members')} className="border-2 border-dashed border-slate-300 rounded-2xl flex items-center justify-center text-slate-300 h-16">
-                  <Plus size={20} />
-                </button>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* 分頁：表現筆記 */}
-        {activeTab === 'training' && (
-          <section className="space-y-4 animate-in fade-in duration-500">
-            <h2 className="font-black text-slate-800">教練技術評核</h2>
-            {data.members.map(member => (
-              <div key={member.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-black text-slate-700">{member.name}</span>
-                  <div className={`w-2 h-2 rounded-full ${member.status === 'present' ? 'bg-green-500' : 'bg-red-400'}`}></div>
-                </div>
-                <textarea
-                  value={member.note || ''}
-                  onChange={(e) => updateNote(member.id, e.target.value)}
-                  placeholder="輸入今日訓練觀察..."
-                  className="w-full text-xs bg-slate-50 rounded-xl p-3 border-none focus:ring-1 focus:ring-yellow-500 h-24 resize-none"
-                />
-              </div>
+          {/* Tabs */}
+          <nav className="flex px-6 gap-2 mb-6">
+            {['attendance', 'feedback', 'management'].map(t => (
+              <button 
+                key={t}
+                onClick={() => setActiveTab(t)}
+                className={`flex-1 py-3 rounded-xl text-xs font-bold shadow-lg transition-all ${activeTab === t ? 'bg-amber-500 text-slate-900 scale-105' : 'bg-slate-800 text-slate-400'}`}
+              >
+                {t === 'attendance' ? '快速點名' : t === 'feedback' ? '教學回饋' : '人員排序'}
+              </button>
             ))}
-          </section>
-        )}
+          </nav>
 
-        {/* 分頁：管理名單 */}
-        {activeTab === 'manage' && (
-          <section className="space-y-6 animate-in fade-in duration-500">
-            {['coaches', 'members'].map(type => (
-              <div key={type} className="bg-white rounded-3xl overflow-hidden border border-slate-100 shadow-sm">
-                <div className="p-4 bg-slate-100 border-b flex justify-between items-center">
-                  <span className="font-black text-[10px] uppercase tracking-widest text-slate-400">
-                    {type === 'coaches' ? '教練團隊' : '隊員名單'}
-                  </span>
-                  <button onClick={() => addPerson(type)} className="text-blue-500"><Plus size={18}/></button>
+          {/* Main Content Area (Capture Target) */}
+          <div ref={captureRef} className="px-6 space-y-8 pb-10">
+            {['coaches', 'u9', 'u10'].map(group => (
+              <section key={group} className="space-y-3">
+                <div className="flex justify-between items-center border-l-4 border-amber-500 pl-3">
+                  <h2 className="text-sm font-black text-amber-500 uppercase tracking-widest">{group} {group === 'coaches' ? '教練組' : '球員組'}</h2>
+                  {activeTab === 'management' && <button onClick={() => addPerson(group)} className="text-amber-500 hover:scale-110 transition"><Plus size={18}/></button>}
                 </div>
-                <div className="divide-y divide-slate-50">
-                  {data[type].map(person => (
-                    <div key={person.id} className="p-4 flex justify-between items-center">
-                      <span className="font-bold text-slate-700">{person.name}</span>
-                      <button onClick={() => deletePerson(type, person.id)} className="text-slate-300 hover:text-red-500 transition-colors">
-                        <Trash2 size={16} />
-                      </button>
+
+                <div className="grid grid-cols-1 gap-2">
+                  {data[group].map((p, idx) => (
+                    <div key={p.id} className="bg-slate-800/50 border border-slate-700 p-3 rounded-xl flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        {activeTab === 'management' && (
+                          <div className="flex flex-col gap-1">
+                            <button onClick={() => moveItem(group, idx, -1)} className="text-slate-600 hover:text-amber-500"><ChevronUp size={14}/></button>
+                            <button onClick={() => moveItem(group, idx, 1)} className="text-slate-600 hover:text-amber-500"><ChevronDown size={14}/></button>
+                          </div>
+                        )}
+                        <div>
+                          <p className="font-bold text-slate-200">{p.name}</p>
+                          {activeTab === 'feedback' && <p className="text-[10px] text-slate-500 italic mt-1">{p.note || '尚無教練評語'}</p>}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {activeTab === 'attendance' && (
+                          <button 
+                            onClick={() => toggleStatus(group, p.id)}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                              p.status === 'present' ? 'bg-green-500/20 text-green-400 border border-green-500/50' :
+                              p.status === 'late' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' :
+                              'bg-red-500/20 text-red-400 border border-red-500/50'
+                            }`}
+                          >
+                            {p.status === 'present' ? '出席' : p.status === 'late' ? '遲到' : '缺席'}
+                          </button>
+                        )}
+                        {activeTab === 'feedback' && (
+                          <button onClick={() => {
+                            const val = prompt(`給 ${p.name} 的訓練反饋:`, p.note);
+                            if (val !== null) updateNote(group, p.id, val);
+                          }} className="text-slate-500 hover:text-amber-500"><MessageSquare size={18}/></button>
+                        )}
+                        {activeTab === 'management' && (
+                          <button onClick={() => deletePerson(group, p.id)} className="text-slate-700 hover:text-red-500"><Trash2 size={16}/></button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
             ))}
-          </section>
-        )}
-      </main>
+            
+            {/* 截圖浮水印 */}
+            {isCapturing && (
+              <div className="text-center pt-6 opacity-30">
+                <p className="text-[10px] font-bold text-amber-500 tracking-widest uppercase">Tigers Club Official Report</p>
+                <p className="text-[8px] text-slate-400">{new Date().toLocaleString()}</p>
+              </div>
+            )}
+          </div>
 
-      {/* 導出報表按鈕 */}
-      {activeTab === 'attendance' && !isCapturing && (
-        <button
-          onClick={handleExport}
-          className="fixed bottom-6 right-6 bg-slate-900 text-white p-4 rounded-full shadow-2xl hover:scale-110 active:scale-90 transition-all z-50"
-        >
-          <Download size={24} />
-        </button>
+          {/* Action Button */}
+          {activeTab === 'attendance' && !isCapturing && (
+            <button 
+              onClick={downloadReport}
+              className="fixed bottom-8 right-8 bg-amber-500 text-slate-900 p-4 rounded-full shadow-[0_0_20px_rgba(245,158,11,0.4)] hover:scale-110 active:scale-95 transition-all z-50"
+            >
+              <Download size={24} />
+            </button>
+          )}
+        </div>
+      ) : (
+        /* 家長查詢模式 */
+        <div className="p-8 space-y-8 animate-in fade-in duration-500">
+          <header className="text-center space-y-2">
+            <h2 className="text-2xl font-black text-amber-500 tracking-tight">球員動態查詢</h2>
+            <p className="text-xs text-slate-400 uppercase tracking-widest">Parent's Inquiry Portal</p>
+          </header>
+
+          <div className="relative">
+            <input 
+              type="text" 
+              placeholder="請輸入小朋友姓名..." 
+              value={searchName}
+              onChange={(e) => setSearchName(e.target.value)}
+              className="w-full bg-slate-800 border-2 border-slate-700 rounded-2xl py-4 px-6 text-slate-100 placeholder:text-slate-600 focus:border-amber-500 focus:outline-none transition-all"
+            />
+            <button 
+              onClick={handleParentSearch}
+              className="absolute right-3 top-3 bg-amber-500 text-slate-900 p-2 rounded-xl"
+            >
+              <Search size={20} />
+            </button>
+          </div>
+
+          {searchResult === 'not_found' && (
+            <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl text-center">
+              <p className="text-red-400 font-bold">找不到該學員，請確認姓名是否正確。</p>
+            </div>
+          )}
+
+          {searchResult && searchResult !== 'not_found' && (
+            <div className="bg-slate-800 border border-amber-500/30 rounded-3xl overflow-hidden shadow-2xl">
+              <div className="bg-amber-500 p-6">
+                <p className="text-slate-900 text-xs font-black uppercase tracking-widest opacity-60">Player Profile</p>
+                <h3 className="text-slate-900 text-3xl font-black mt-1">{searchResult.name}</h3>
+              </div>
+              <div className="p-6 space-y-6">
+                <div className="flex justify-between items-center bg-slate-700/30 p-4 rounded-2xl">
+                  <span className="text-slate-400 text-sm font-bold">今日出缺席</span>
+                  <span className={`font-black ${searchResult.status === 'present' ? 'text-green-400' : 'text-red-400'}`}>
+                    {searchResult.status === 'present' ? '出席 PRESENT' : searchResult.status === 'late' ? '遲到 LATE' : '缺席 ABSENT'}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  <span className="text-slate-400 text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <MessageSquare size={14} className="text-amber-500"/> 教練回饋
+                  </span>
+                  <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-700 italic text-slate-300 leading-relaxed">
+                    {searchResult.note || "今日教練尚未輸入反饋，請稍後再試。"}
+                  </div>
+                </div>
+                <p className="text-[10px] text-center text-slate-500 font-bold uppercase tracking-tighter pt-4">Data Synchronized with Cloud Server</p>
+              </div>
+            </div>
+          )}
+
+          <footer className="pt-20 text-center opacity-20 grayscale">
+             <h1 className="text-xl font-black italic tracking-tighter text-amber-500">TIGERS CLUB</h1>
+          </footer>
+        </div>
       )}
-
-      {/* 頁尾 */}
-      <footer className="p-8 text-center">
-        <p className="text-[8px] font-black text-slate-300 tracking-[0.2em] uppercase">Powered by Football Pro Cloud System</p>
-      </footer>
     </div>
   );
 }
