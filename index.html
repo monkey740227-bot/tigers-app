@@ -3,161 +3,115 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tigers Elite - Connection Diagnostic</title>
+    <title>美育虎 Tigers Elite Pro 管理系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, collection, onSnapshot, addDoc, query, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-elite-v1';
-        let db, auth, currentUser;
+        // --- 設定 (請確保此處有正確配置) ---
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"apiKey":"YOUR_API_KEY"}'); 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tigers-elite-pro';
+        
+        let app, auth, db;
+        let members = [];
+        let attendanceData = {}; 
+        let viewMode = 'coach';
+        let currentDate = new Date().toISOString().split('T')[0];
 
-        // 診斷日誌函數
-        function log(step, status, details = "") {
-            const list = document.getElementById('diag-list');
-            const item = document.createElement('div');
-            item.className = `p-3 mb-2 rounded border ${status === 'error' ? 'bg-red-900/20 border-red-500/50 text-red-200' : 'bg-green-900/20 border-green-500/50 text-green-200'}`;
-            item.innerHTML = `
-                <div class="flex justify-between font-bold">
-                    <span>${step}</span>
-                    <span>${status === 'error' ? '✘' : '✔'}</span>
-                </div>
-                <div class="text-[10px] mt-1 opacity-80 font-mono break-all">${details}</div>
-            `;
-            list.appendChild(item);
-        }
-
-        async function runDiagnostic() {
-            // Step 1: 檢查變數
-            if (typeof __firebase_config === 'undefined') {
-                log("環境變數檢查", "error", "__firebase_config is undefined. 系統尚未注入金鑰。");
-                return;
-            }
-            log("環境變數檢查", "success", "已偵測到配置數據。");
-
+        async function initSystem() {
             try {
-                // Step 2: 初始化 App
-                const config = JSON.parse(__firebase_config);
-                const app = initializeApp(config);
+                app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                log("Firebase 初始化", "success", `Project ID: ${config.projectId}`);
-
-                // Step 3: 身份驗證 (遵守 Rule 3)
-                log("身份驗證中...", "success", "正在嘗試匿名/Token 登入...");
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        currentUser = user;
-                        log("Auth 狀態", "success", `UID: ${user.uid}`);
-                        
-                        // Step 4: 測試 Firestore 讀取 (遵守 Rule 1 & 2)
-                        testFirestore();
-                    } else {
-                        log("Auth 狀態", "error", "用戶未登入。");
-                    }
-                });
-
-            } catch (err) {
-                log("致命錯誤", "error", `${err.code}: ${err.message}`);
-            }
+                onAuthStateChanged(auth, (user) => { if (user) loadData(); else signInAnonymously(auth); });
+            } catch (e) { renderError(e.message); }
         }
 
-        async function testFirestore() {
-            log("Firestore 通訊測試", "success", "正在嘗試讀取 public/data 路徑...");
-            // 嚴格遵循路徑規則: /artifacts/{appId}/public/data/{collection}
-            const path = `artifacts/${appId}/public/data/members`;
-            const colRef = collection(db, path);
-
-            try {
-                // 先嘗試一次性獲取，確認權限
-                const snap = await getDocs(colRef);
-                log("權限驗證", "success", `成功讀取，目前有 ${snap.size} 筆數據。`);
-                
-                // 啟動實時監聽
-                startApp(colRef);
-            } catch (err) {
-                log("權限驗證失敗", "error", `路徑: ${path} | 錯誤碼: ${err.code} | 訊息: ${err.message}`);
-                if (err.code === 'permission-denied') {
-                    log("原因分析", "error", "這是路徑規則衝突。請確保 appId 與 Firebase 規則一致。");
-                }
-            }
-        }
-
-        function startApp(colRef) {
-            document.getElementById('diagnostic-overlay').classList.add('hidden');
-            const appUi = document.getElementById('app-ui');
-            appUi.classList.remove('hidden');
-
-            onSnapshot(colRef, (snap) => {
-                const members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                renderList(members);
-            }, (err) => {
-                console.error("Snapshot error:", err);
+        async function loadData() {
+            const memCol = collection(db, 'artifacts', appId, 'public', 'data', 'members');
+            onSnapshot(memCol, async (snap) => {
+                members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                await loadAttendance(currentDate);
             });
         }
 
-        function renderList(members) {
-            const listEl = document.getElementById('member-list');
-            listEl.innerHTML = members.map(m => `
-                <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-2">
-                    <div class="font-bold">${m.name}</div>
-                    <div class="text-[10px] text-slate-500">${m.role || 'U9'}</div>
-                </div>
-            `).join('');
+        async function loadAttendance(date) {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
+            const snap = await getDoc(docRef);
+            attendanceData = snap.exists() ? snap.data() : {};
+            renderApp();
         }
 
-        window.addPlayer = async () => {
-            const name = prompt("輸入球員姓名");
-            if (!name || !currentUser) return;
-            try {
-                const path = `artifacts/${appId}/public/data/members`;
-                await addDoc(collection(db, path), {
-                    name,
-                    role: 'U9',
-                    createdBy: currentUser.uid,
-                    createdAt: new Date().toISOString()
-                });
-            } catch (err) {
-                alert("儲存失敗: " + err.message);
-            }
+        window.updateStatus = async (id, status) => {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
+            attendanceData[id] = { ...(attendanceData[id] || {}), status };
+            await setDoc(docRef, attendanceData, { merge: true });
+            renderApp();
         };
 
-        window.onload = runDiagnostic;
-    </script>
-</head>
-<body class="bg-slate-950 text-slate-200 font-sans">
-    <!-- 診斷畫面 -->
-    <div id="diagnostic-overlay" class="fixed inset-0 z-50 p-6 flex flex-col">
-        <h1 class="text-xl font-black italic text-amber-500 mb-4">SYSTEM DIAGNOSTIC</h1>
-        <div id="diag-list" class="flex-1 overflow-y-auto">
-            <!-- 日誌注入點 -->
-        </div>
-        <div class="p-4 text-center">
-            <p class="text-xs text-slate-500 mb-4">正在定位連線崩潰點...</p>
-        </div>
-    </div>
+        window.updateFeedback = async (id, text) => {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
+            attendanceData[id] = { ...(attendanceData[id] || {}), feedback: text };
+            await setDoc(docRef, attendanceData, { merge: true });
+        };
 
-    <!-- 應用畫面 (預設隱藏) -->
-    <div id="app-ui" class="hidden max-w-md mx-auto p-6">
-        <header class="mb-8">
-            <h1 class="text-3xl font-black italic text-amber-500">TIGERS ELITE</h1>
-            <p class="text-xs text-slate-500 uppercase">U9/U10 Dashboard</p>
-        </header>
-        
-        <div id="member-list" class="min-h-[300px]">
-            <!-- 成員名單 -->
-        </div>
+        window.changeDate = (date) => {
+            currentDate = date;
+            loadAttendance(date);
+        };
 
-        <button onclick="addPlayer()" class="w-full mt-6 py-4 bg-amber-500 text-slate-950 font-bold rounded-xl uppercase italic">
-            Add Player
-        </button>
-    </div>
-</body>
-</html>
+        window.switchView = (mode) => { viewMode = mode; renderApp(); };
+
+        window.searchChild = async () => {
+            const name = document.getElementById('parentSearchInput').value.trim();
+            const result = members.find(m => m.name === name);
+            const container = document.getElementById('searchResult');
+            if (!result) { container.innerHTML = `<p class="text-rose-400 text-center">找不到該球員</p>`; return; }
+            
+            // 安全查詢：只抓今日該球員
+            const attRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', currentDate);
+            const attSnap = await getDoc(attRef);
+            const record = attSnap.exists() ? (attSnap.data()[result.id] || {}) : {};
+
+            container.innerHTML = `
+                <div class="bg-slate-900 border-2 border-amber-500 p-6 rounded-2xl animate-in">
+                    <p class="text-amber-500 font-black text-2xl mb-4">${result.name}</p>
+                    <div class="space-y-3">
+                        <div class="flex justify-between border-b border-slate-800 pb-2">
+                            <span class="text-slate-500 text-xs">出席狀態 (${currentDate})</span>
+                            <span class="font-bold ${record.status==='present'?'text-green-400':'text-rose-400'}">${record.status==='present'?'出席':'未到/未點'}</span>
+                        </div>
+                        <div class="pt-2">
+                            <p class="text-slate-500 text-xs mb-1">教練評語</p>
+                            <p class="text-slate-200 leading-relaxed">${record.feedback || '表現優異，繼續加油！'}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        function renderApp() {
+            const root = document.getElementById('app');
+            root.innerHTML = viewMode === 'coach' ? renderCoachHTML() : renderParentHTML();
+        }
+
+        function renderCoachHTML() {
+            return `
+                <div class="max-w-4xl mx-auto p-4 md:p-8">
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+                        <h1 class="text-3xl font-black text-amber-500">TIGERS ELITE <span class="text-white">PRO</span></h1>
+                        <div class="flex gap-2">
+                            <input type="date" value="${currentDate}" onchange="changeDate(this.value)" class="bg-slate-800 text-white px-3 py-2 rounded-xl text-sm border border-slate-700">
+                            <button onclick="switchView('parent')" class="bg-slate-800 px-4 py-2 rounded-xl text-sm font-bold">查詢模式</button>
+                        </div>
+                    </div>
+                    
+                    <div class="space-y-6">
+                        ${['coach', 'u9', 'u10'].map(role => `
+                            <div>
+                                <p class="text-[10px] font-black text-slate-600 tracking-widest mb-3 uppercase">${role}</p>
+                                <div class="grid gap-3">
+                                    ${members.filter(m
